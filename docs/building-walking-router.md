@@ -94,12 +94,18 @@ bunx vitest run \
   src/components/svelte/building-route/BuildingRouteMapOverlay.component.test.ts \
   src/components/svelte/controls/EntityDirectionsChip.component.test.ts \
   src/lib/focus-trap.component.test.ts
-bunx playwright test -c playwright.advisory.config.ts \
-  e2e/advisory/building-route.spec.ts
+bun run e2e:advisory -- e2e/advisory/building-route.spec.ts
 ```
 
-Before merging, also run `bun run lint`, `bun run test`,
-`bun run test:components`, and `bun run build`, plus the relevant advisory E2E.
+Before marking the PR ready, follow the repository-wide gate in
+`docs/testing.md`:
+
+```sh
+bun run lint && bun run test:all && bun run build
+bun run test:integration:live   # requires the E2E DB / preview environment
+bun run e2e                     # blocking Playwright suite
+```
+
 Validate 320 px, 768 px, and desktop layouts. Visual QA should include New Math
 → Physical Sciences, a same-edge pair, a cross-campus pair, and a known
 off-network endpoint.

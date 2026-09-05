@@ -1,15 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import {
-  ENDPOINT_SNAP_TOLERANCE_METERS,
-} from "../../src/constants/travel-modes";
+import { ENDPOINT_SNAP_TOLERANCE_METERS } from "../../src/constants/travel-modes";
+import { distanceMeters } from "../../src/lib/campus-route";
 import {
   buildTravelGraph,
+  nearestNodeIndex,
   type WalkGraphData,
 } from "../../src/lib/travel-graph/engine";
-import {
-  snapBuildingEndpoint,
-  type BuildingRouteEndpoint,
-} from "../../src/lib/travel-graph/building-route";
 import {
   auditBuildingEndpoints,
   type AuditBuilding,
@@ -62,7 +58,7 @@ describe("building route audit baseline", () => {
   );
 
   test(
-    "audit snapping stays in parity with the runtime route core",
+    "legacy audit snapping stays in parity with the legacy nearest-node baseline",
     async () => {
       const { buildings, graph, report } = await loadBaseline();
       const runtimeGraph = buildTravelGraph(graph as unknown as WalkGraphData);
@@ -72,18 +68,26 @@ describe("building route audit baseline", () => {
 
       for (const building of buildings) {
         if (building.lat === null || building.lon === null) continue;
-        const runtimeSnap = snapBuildingEndpoint(runtimeGraph, {
-          ...(building as BuildingRouteEndpoint),
-          lat: building.lat,
-          lon: building.lon,
-        });
+        const nodeIndex = nearestNodeIndex(
+          runtimeGraph,
+          building.lat,
+          building.lon,
+          "walk",
+        );
+        const nodeLat = runtimeGraph.lat[nodeIndex];
+        const nodeLon = runtimeGraph.lng[nodeIndex];
+        if (nodeLat === undefined || nodeLon === undefined) {
+          throw new Error(`missing runtime node ${nodeIndex}`);
+        }
+        const snapMeters = distanceMeters(
+          { lat: building.lat, lon: building.lon },
+          { lat: nodeLat, lon: nodeLon },
+        );
         const audited = auditById.get(building.id);
         expect(audited, building.buildingName).toBeDefined();
-        expect(audited?.nodeIndex, building.buildingName).toBe(
-          runtimeSnap.nodeIndex,
-        );
+        expect(audited?.nodeIndex, building.buildingName).toBe(nodeIndex);
         expect(audited?.snapMeters, building.buildingName).toBe(
-          Math.round(runtimeSnap.snapMeters * 100) / 100,
+          Math.round(snapMeters * 100) / 100,
         );
       }
     },

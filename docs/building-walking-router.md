@@ -59,6 +59,14 @@ bun scripts/building-edge-snap-audit.ts
 bun scripts/building-edge-snap-audit.ts --json
 ```
 
+To evaluate the current selectable building records instead of the historical
+fixture, point both audits at the public deployment:
+
+```sh
+bun scripts/building-route-audit.ts --from-api https://www.uplb.tools
+bun scripts/building-edge-snap-audit.ts --from-api https://www.uplb.tools
+```
+
 The real-campus baseline asserts the monotonic connector rule only for legacy
 nearest-node endpoints that were already on the canonical main component. It
 also checks that known off-campus teaching sites still fail closed and that New
@@ -129,6 +137,7 @@ bun test src/lib/travel-graph/edge-snap.test.ts \
   src/lib/travel-graph/building-route-structural.test.ts \
   src/lib/travel-graph/building-route-map.test.ts \
   src/lib/travel-graph/building-route.baseline.test.ts \
+  scripts/lib/building-route-api-source.test.ts \
   scripts/lib/building-route-source-coverage.test.ts
 bunx vitest run \
   src/components/svelte/building-route/BuildingRoutePanel.component.test.ts \

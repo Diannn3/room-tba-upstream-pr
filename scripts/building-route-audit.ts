@@ -2,13 +2,15 @@
  * Audit Room TBA building pins against the vendored walking graph.
  *
  * This is the Pass 0 gate for building-to-building walking directions. It is
- * intentionally offline and deterministic: both inputs are checked into the
- * repository, so the audit does not depend on Supabase, OSRM, or live OSM.
+ * offline and deterministic by default. Pass `--from-api <deployment>` to
+ * audit the deployment's current selectable building rows without mutating the
+ * historical checked-in research export.
  *
  * Usage:
  *   bun scripts/building-route-audit.ts
  *   bun scripts/building-route-audit.ts --json
  *   bun scripts/building-route-audit.ts --strict
+ *   bun scripts/building-route-audit.ts --from-api https://www.uplb.tools
  */
 
 import { readFile } from "node:fs/promises";
@@ -20,12 +22,21 @@ import {
   type BuildingEndpointAuditReport,
   type DistributionStats,
 } from "./lib/building-route-audit";
+import {
+  buildingApiUrl,
+  fetchBuildingRouteApiRows,
+} from "./lib/building-route-api-source";
 
 const BUILDINGS_PATH = "exports/deep-research/buildings.json";
 const GRAPH_PATH = "src/generated/walk-graph.json";
 
 function hasFlag(flag: string): boolean {
   return process.argv.slice(2).includes(flag);
+}
+
+function argValue(flag: string): string | undefined {
+  const index = process.argv.indexOf(flag);
+  return index === -1 ? undefined : process.argv[index + 1];
 }
 
 function meters(value: number): string {
@@ -44,8 +55,12 @@ function printStats(label: string, stats: DistributionStats | null): void {
   );
 }
 
-function printReport(report: BuildingEndpointAuditReport): void {
+function printReport(
+  report: BuildingEndpointAuditReport,
+  buildingSource: string,
+): void {
   console.log("Room TBA building routing endpoint audit");
+  console.log(`building source: ${buildingSource}`);
   console.log(
     `graph: ${report.graph.nodeCount} nodes, ${report.graph.edgeCount} edges, ` +
       `${report.graph.componentCount} components; main component ${report.graph.mainComponentSize} nodes`,
@@ -94,8 +109,14 @@ async function loadJson<T>(path: string): Promise<T> {
   return JSON.parse(await readFile(path, "utf8")) as T;
 }
 
+const apiBase = argValue("--from-api");
+const buildingSource = apiBase
+  ? `live API (${buildingApiUrl(apiBase)})`
+  : BUILDINGS_PATH;
 const [buildings, graph] = await Promise.all([
-  loadJson<AuditBuilding[]>(BUILDINGS_PATH),
+  apiBase
+    ? fetchBuildingRouteApiRows(apiBase)
+    : loadJson<AuditBuilding[]>(BUILDINGS_PATH),
   loadJson<AuditWalkGraph>(GRAPH_PATH),
 ]);
 
@@ -107,9 +128,9 @@ const report = auditBuildingEndpoints(buildings, graph, {
 });
 
 if (hasFlag("--json")) {
-  console.log(JSON.stringify(report, null, 2));
+  console.log(JSON.stringify({ input: { buildingSource }, ...report }, null, 2));
 } else {
-  printReport(report);
+  printReport(report, buildingSource);
 }
 
 if (

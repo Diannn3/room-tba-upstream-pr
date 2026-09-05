@@ -1,9 +1,14 @@
 /**
  * Compare the legacy nearest-node building connector with edge correlation.
  *
+ * Uses the historical checked-in building fixture by default. Pass
+ * `--from-api <deployment>` to compare current selectable building records
+ * without guessing or backfilling coordinates into that fixture.
+ *
  * Usage:
  *   bun scripts/building-edge-snap-audit.ts
  *   bun scripts/building-edge-snap-audit.ts --json
+ *   bun scripts/building-edge-snap-audit.ts --from-api https://www.uplb.tools
  */
 
 import { ENDPOINT_SNAP_TOLERANCE_METERS } from "../src/constants/travel-modes";
@@ -21,8 +26,23 @@ import {
   snapBuildingEndpoint,
   type BuildingRouteEndpoint,
 } from "../src/lib/travel-graph/building-route";
+import {
+  buildingApiUrl,
+  fetchBuildingRouteApiRows,
+} from "./lib/building-route-api-source";
 
-const buildings = buildingsJson as BuildingRouteEndpoint[];
+function argValue(flag: string): string | undefined {
+  const index = process.argv.indexOf(flag);
+  return index === -1 ? undefined : process.argv[index + 1];
+}
+
+const apiBase = argValue("--from-api");
+const buildings = apiBase
+  ? await fetchBuildingRouteApiRows(apiBase)
+  : (buildingsJson as BuildingRouteEndpoint[]);
+const buildingSource = apiBase
+  ? `live API (${buildingApiUrl(apiBase)})`
+  : "exports/deep-research/buildings.json";
 const graph = buildTravelGraph(walkGraphJson as unknown as WalkGraphData);
 
 function percentile(values: number[], p: number): number {
@@ -95,6 +115,7 @@ const nodeDistances = rows.map((row) => row.nodeSnapMeters);
 const edgeDistances = rows.map((row) => row.edgeSnapMeters);
 const improvements = rows.map((row) => row.improvementMeters);
 const report = {
+  input: { buildingSource },
   policy: {
     hardSnapLimitMeters: ENDPOINT_SNAP_TOLERANCE_METERS,
     connectivity: "largest-weak-component",
@@ -123,6 +144,7 @@ if (process.argv.includes("--json")) {
 } else {
   const fmt = (value: number) => `${value.toFixed(1)} m`;
   console.log("Room TBA building connector edge-snap audit");
+  console.log(`building source: ${buildingSource}`);
   console.log(
     `buildings: ${report.summary.buildingCount}; comparable=${report.summary.comparableCount}; ` +
       `strictly improved=${report.summary.strictlyImprovedCount}; support changes=${report.summary.supportChangedCount}`,

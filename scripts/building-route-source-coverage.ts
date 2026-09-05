@@ -18,6 +18,10 @@ import auditBuildingsJson from "../exports/deep-research/buildings.json";
 import auditManifestJson from "../exports/deep-research/manifest.json";
 import landmarkImagesJson from "../src/constants/landmark-images.json";
 import {
+  buildingApiUrl,
+  fetchBuildingRouteApiRows,
+} from "./lib/building-route-api-source";
+import {
   buildingNamesFromLandmarkManifest,
   compareBuildingRouteSourceCoverage,
   type BuildingRouteCoverageRow,
@@ -32,46 +36,10 @@ function hasFlag(flag: string): boolean {
   return process.argv.includes(flag);
 }
 
-function buildingApiUrl(base: string): string {
-  const trimmed = base.replace(/\/$/, "");
-  return trimmed.endsWith("/api/buildings")
-    ? trimmed
-    : `${trimmed}/api/buildings`;
-}
-
-async function liveBuildingNames(base: string): Promise<string[]> {
-  const url = buildingApiUrl(base);
-  const response = await fetch(url, {
-    headers: {
-      "user-agent":
-        "RoomTBA-building-route-source-audit/1.0 (https://github.com/uplbtools/room-tba)",
-    },
-  });
-  if (!response.ok) {
-    throw new Error(`building route source audit: ${response.status} from ${url}`);
-  }
-  const rows = (await response.json()) as unknown;
-  if (!Array.isArray(rows)) {
-    throw new Error("building route source audit: buildings API did not return an array");
-  }
-  return rows.map((row, index) => {
-    if (
-      typeof row !== "object" ||
-      row === null ||
-      !("buildingName" in row) ||
-      typeof row.buildingName !== "string"
-    ) {
-      throw new Error(
-        `building route source audit: API row ${index} has no buildingName`,
-      );
-    }
-    return row.buildingName;
-  });
-}
-
 const apiBase = argValue("--from-api");
-const referenceNames = apiBase
-  ? await liveBuildingNames(apiBase)
+const liveRows = apiBase ? await fetchBuildingRouteApiRows(apiBase) : null;
+const referenceNames = liveRows
+  ? liveRows.map((building) => building.buildingName)
   : buildingNamesFromLandmarkManifest(
       landmarkImagesJson as Record<string, unknown>,
     );

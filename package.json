@@ -25,6 +25,7 @@
     "format": "biome format --write .",
     "test": "bun test src/lib src/constants scripts/lib --path-ignore-patterns='**/*.store.test.ts' --path-ignore-patterns='**/*.component.test.ts'",
     "test:routing": "bun test src/lib/travel-graph/edge-snap.test.ts src/lib/travel-graph/building-route.test.ts src/lib/travel-graph/building-route-structural.test.ts src/lib/travel-graph/building-route-map.test.ts src/lib/travel-graph/building-route.baseline.test.ts src/lib/search-suggestions.building-route.test.ts scripts/build-walk-graph.test.ts scripts/lib/building-route-audit.test.ts scripts/lib/building-route-audit.baseline.test.ts scripts/lib/building-route-api-source.test.ts scripts/lib/building-route-audit-provenance.test.ts scripts/lib/building-route-source-coverage.test.ts",
+    "test:room-transfer": "bun test src/lib/travel-graph/room-transfer.test.ts src/lib/schedule-import/match-classes.test.ts src/lib/schedule-import/day-stops.test.ts src/lib/schedule-import/class-transfer.test.ts src/lib/schedule-import/room-transfer-source.test.ts src/lib/schedule-import/class-transfer-plan.test.ts src/lib/schedule-import/class-transfer-copy.test.ts",
     "test:components": "vitest run",
     "test:integration": "bun test ./integration --preload ./integration/preload.ts --concurrency 1 --timeout 20000",
     "test:integration:live": "bash scripts/run-integration-preview.sh",

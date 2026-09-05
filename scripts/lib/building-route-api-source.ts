@@ -48,8 +48,11 @@ export function parseBuildingRouteApiRows(payload: unknown): BuildingRouteApiRow
   if (!Array.isArray(payload)) {
     throw new Error("building route API source: buildings API did not return an array");
   }
+  if (payload.length === 0) {
+    throw new Error("building route API source: buildings API returned no rows");
+  }
 
-  return payload.map((raw, index) => {
+  const rows = payload.map((raw, index) => {
     if (typeof raw !== "object" || raw === null) {
       throw new Error(`building route API source: row ${index} is not an object`);
     }
@@ -72,6 +75,16 @@ export function parseBuildingRouteApiRows(payload: unknown): BuildingRouteApiRow
       lon: nullableCoordinate(row.lon, `row ${index} lon`, -180, 180),
     };
   });
+
+  const seenIds = new Set<number>();
+  for (const row of rows) {
+    if (seenIds.has(row.id)) {
+      throw new Error(`building route API source: duplicate building id ${row.id}`);
+    }
+    seenIds.add(row.id);
+  }
+
+  return rows;
 }
 
 export async function fetchBuildingRouteApiRows(

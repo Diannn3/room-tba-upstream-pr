@@ -70,4 +70,14 @@ describe("building route API source", () => {
       ]),
     ).toThrow(/lon is outside -180\.\.180/i);
   });
+
+  test("fails closed on empty or duplicate-id API payloads", () => {
+    expect(() => parseBuildingRouteApiRows([])).toThrow(/returned no rows/i);
+    expect(() =>
+      parseBuildingRouteApiRows([
+        { id: 7, buildingName: "Alpha", lat: 14, lon: 121 },
+        { id: "7", buildingName: "Beta", lat: 14.1, lon: 121.1 },
+      ]),
+    ).toThrow(/duplicate building id 7/i);
+  });
 });

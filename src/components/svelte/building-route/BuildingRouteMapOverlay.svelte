@@ -13,6 +13,7 @@
   } from "@lib/travel-graph/building-route-map";
 
   const GRAPH_SOURCE = "building-walk-route-graph";
+  const GRAPH_CASING_LAYER = "building-walk-route-graph-casing";
   const GRAPH_LAYER = "building-walk-route-graph";
   const CONNECTOR_SOURCE = "building-walk-route-connectors";
   const CONNECTOR_LAYER = "building-walk-route-connectors";
@@ -20,18 +21,17 @@
   let lastFitKey: string | null = null;
 
   function removeRouteLayers(map: MapLibreMap) {
-    if (map.getLayer(CONNECTOR_LAYER)) map.removeLayer(CONNECTOR_LAYER);
     if (map.getLayer(GRAPH_LAYER)) map.removeLayer(GRAPH_LAYER);
-    if (map.getSource(CONNECTOR_SOURCE)) map.removeSource(CONNECTOR_SOURCE);
+    if (map.getLayer(GRAPH_CASING_LAYER)) map.removeLayer(GRAPH_CASING_LAYER);
+    if (map.getLayer(CONNECTOR_LAYER)) map.removeLayer(CONNECTOR_LAYER);
     if (map.getSource(GRAPH_SOURCE)) map.removeSource(GRAPH_SOURCE);
+    if (map.getSource(CONNECTOR_SOURCE)) map.removeSource(CONNECTOR_SOURCE);
   }
 
-  function setOrAddLine(
+  function setOrAddSource(
     map: MapLibreMap,
     sourceId: string,
-    layerId: string,
     data: FeatureCollection<LineString>,
-    dashed: boolean,
   ) {
     const source = map.getSource(sourceId) as GeoJSONSource | undefined;
     if (source) {
@@ -39,20 +39,56 @@
     } else {
       map.addSource(sourceId, { type: "geojson", data });
     }
+  }
 
-    if (map.getLayer(layerId)) return;
-    map.addLayer({
-      id: layerId,
-      type: "line",
-      source: sourceId,
-      layout: { "line-cap": "round", "line-join": "round" },
-      paint: {
-        "line-color": dashed ? "#71717a" : "#8d1437",
-        "line-width": dashed ? 3 : 5,
-        "line-opacity": dashed ? 0.78 : 0.95,
-        ...(dashed ? { "line-dasharray": [1.5, 1.5] } : {}),
-      },
-    });
+  function ensureRouteLayers(map: MapLibreMap) {
+    // Approximate pin connectors deliberately sit below all authoritative
+    // route paint. Their lighter dash communicates "access approximation"
+    // without competing with the mapped walking geometry.
+    if (!map.getLayer(CONNECTOR_LAYER)) {
+      map.addLayer({
+        id: CONNECTOR_LAYER,
+        type: "line",
+        source: CONNECTOR_SOURCE,
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-color": "#71717a",
+          "line-width": 2,
+          "line-opacity": 0.56,
+          "line-dasharray": [1, 1.5],
+        },
+      });
+    }
+
+    // Match Room TBA's existing route visual language: a neutral casing keeps
+    // the maroon line legible across labels, buildings, and road strokes.
+    if (!map.getLayer(GRAPH_CASING_LAYER)) {
+      map.addLayer({
+        id: GRAPH_CASING_LAYER,
+        type: "line",
+        source: GRAPH_SOURCE,
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-color": "#ffffff",
+          "line-width": 8,
+          "line-opacity": 0.82,
+        },
+      });
+    }
+
+    if (!map.getLayer(GRAPH_LAYER)) {
+      map.addLayer({
+        id: GRAPH_LAYER,
+        type: "line",
+        source: GRAPH_SOURCE,
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-color": "#8d1437",
+          "line-width": 5,
+          "line-opacity": 0.95,
+        },
+      });
+    }
   }
 
   function syncRoute(map: MapLibreMap) {
@@ -65,14 +101,9 @@
     }
 
     const data = buildingRouteGeoJson(route);
-    setOrAddLine(map, GRAPH_SOURCE, GRAPH_LAYER, data.graph, false);
-    setOrAddLine(
-      map,
-      CONNECTOR_SOURCE,
-      CONNECTOR_LAYER,
-      data.connectors,
-      true,
-    );
+    setOrAddSource(map, CONNECTOR_SOURCE, data.connectors);
+    setOrAddSource(map, GRAPH_SOURCE, data.graph);
+    ensureRouteLayers(map);
   }
 
   function routeFitPadding(map: MapLibreMap) {
@@ -134,7 +165,6 @@
 
   $effect(() => {
     const map = mapStore.mapInstance ?? null;
-    // Track route identity so clear/replan immediately updates the layers.
     const route = buildingRouteStore.route;
     if (!map) return;
 
@@ -144,10 +174,6 @@
     };
 
     sync();
-    // Restore our app-owned sources only after a replacement style is fully
-    // loaded. `styledata` fires during intermediate style mutations as well;
-    // `style.load` is the stable seam documented by MapLibre for a completed
-    // style change.
     map.on("style.load", sync);
 
     return () => {

@@ -7,6 +7,7 @@ import {
   type WalkGraphData,
 } from "./engine";
 import {
+  isMainWalkComponentEdge,
   isMainWalkComponentNode,
   isValidBuildingRouteCoordinate,
   mainWalkComponentMask,
@@ -18,7 +19,6 @@ import {
 const METERS_PER_DEGREE = 111_320;
 const WALK_MPS = WALK_KPH / 3.6;
 
-/** Three walk nodes in a line, two 100 m graph edges. */
 const lineFixture: WalkGraphData = {
   meta: { coordScale: 1e6, nodeCount: 3, edgeCount: 2 },
   nodes: [
@@ -79,17 +79,24 @@ describe("building route endpoint validation", () => {
     );
   });
 
-  test("snap exposes the nearest node and endpoint-to-node connector", () => {
-    const endpoint = building(1, "A", 14 + 30 / METERS_PER_DEGREE, 121);
+  test("snap exposes the closest point on an edge and exact pin connector", () => {
+    const endpoint = building(
+      1,
+      "A",
+      14 + 30 / METERS_PER_DEGREE,
+      121.0005,
+    );
     if (!isValidBuildingRouteCoordinate(endpoint)) throw new Error("fixture");
     const snap = snapBuildingEndpoint(lineGraph, endpoint);
 
-    expect(snap.nodeIndex).toBe(0);
-    expect(snap.snapMeters).toBeCloseTo(30, 6);
-    expect(snap.nodeCoordinate).toEqual([121, 14]);
-    expect(snap.endpointToNodeCoordinates).toEqual([
-      [121, endpoint.lat],
-      [121, 14],
+    expect(snap.edgeIndex).toBe(0);
+    expect(snap.fractionAlongEdge).toBeCloseTo(0.5, 3);
+    expect(snap.snapMeters).toBeCloseTo(30, 4);
+    expect(snap.snappedCoordinate[0]).toBeCloseTo(121.0005, 8);
+    expect(snap.snappedCoordinate[1]).toBeCloseTo(14, 8);
+    expect(snap.endpointToEdgeCoordinates).toEqual([
+      [121.0005, endpoint.lat],
+      snap.snappedCoordinate,
     ]);
   });
 });
@@ -107,48 +114,67 @@ describe("routeBuildingToBuilding", () => {
     if (result.status !== "ok") return;
     expect(result.originSnap.snapMeters).toBeCloseTo(0, 9);
     expect(result.destinationSnap.snapMeters).toBeCloseTo(0, 9);
-    expect(result.route.graphMeters).toBe(200);
+    expect(result.route.graphMeters).toBeCloseTo(200, 9);
     expect(result.route.totalMeters).toBeCloseTo(200, 9);
     expect(result.route.graphSeconds).toBeCloseTo(200 / WALK_MPS, 9);
     expect(result.route.totalSeconds).toBeCloseTo(200 / WALK_MPS, 9);
   });
 
-  test("adds both endpoint connectors to canonical distance and ETA", () => {
-    const originLat = 14 - 30 / METERS_PER_DEGREE;
-    const destinationLat = 14 + 20 / METERS_PER_DEGREE;
+  test("starts and ends the mapped route at virtual edge positions", () => {
+    const originLat = 14 + 30 / METERS_PER_DEGREE;
+    const destinationLat = 14 - 20 / METERS_PER_DEGREE;
     const result = routeBuildingToBuilding({
       graph: lineGraph,
-      origin: building(1, "A", originLat, 121),
-      destination: building(2, "B", destinationLat, 121.002),
+      origin: building(1, "A", originLat, 121.0002),
+      destination: building(2, "B", destinationLat, 121.0018),
       maxSnapMeters: 100,
     });
 
     expect(result.status).toBe("ok");
     if (result.status !== "ok") return;
-
-    expect(result.originSnap.snapMeters).toBeCloseTo(30, 6);
-    expect(result.destinationSnap.snapMeters).toBeCloseTo(20, 6);
-    expect(result.route.graphMeters).toBe(200);
-    expect(result.route.graphSeconds).toBeCloseTo(160, 9);
-    expect(result.route.totalMeters).toBeCloseTo(250, 6);
-    expect(result.route.totalSeconds).toBeCloseTo(200, 6);
-    expect(result.walkingSpeedKph).toBe(WALK_KPH);
-
-    // Geometry is deliberately split so the UI cannot accidentally style
-    // approximate pin connectors as authoritative mapped footpaths.
-    expect(result.route.graphCoordinates[0]).toEqual([121, 14]);
-    expect(result.route.graphCoordinates.at(-1)).toEqual([121.002, 14]);
-    expect(result.route.originConnectorCoordinates).toEqual([
-      [121, originLat],
-      [121, 14],
-    ]);
-    expect(result.route.destinationConnectorCoordinates).toEqual([
-      [121.002, 14],
-      [121.002, destinationLat],
-    ]);
+    expect(result.originSnap.snapMeters).toBeCloseTo(30, 4);
+    expect(result.destinationSnap.snapMeters).toBeCloseTo(20, 4);
+    expect(result.route.graphMeters).toBeCloseTo(160, 3);
+    expect(result.route.originConnectorMeters).toBeCloseTo(30, 4);
+    expect(result.route.destinationConnectorMeters).toBeCloseTo(20, 4);
+    expect(result.route.totalMeters).toBeCloseTo(210, 3);
+    expect(result.route.totalSeconds).toBeCloseTo(210 / WALK_MPS, 3);
+    expect(result.route.graphCoordinates[0]).toEqual(
+      result.originSnap.snappedCoordinate,
+    );
+    expect(result.route.graphCoordinates.at(-1)).toEqual(
+      result.destinationSnap.snappedCoordinate,
+    );
+    expect(result.route.originConnectorCoordinates.at(-1)).toEqual(
+      result.route.graphCoordinates[0],
+    );
+    expect(result.route.destinationConnectorCoordinates[0]).toEqual(
+      result.route.graphCoordinates.at(-1),
+    );
   });
 
-  test("same snapped node still charges both connectors for different buildings", () => {
+  test("routes directly between two virtual positions on the same two-way edge", () => {
+    const result = routeBuildingToBuilding({
+      graph: lineGraph,
+      origin: building(1, "A", 14 + 10 / METERS_PER_DEGREE, 121.0002),
+      destination: building(2, "B", 14 - 15 / METERS_PER_DEGREE, 121.0008),
+      maxSnapMeters: 50,
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.originSnap.edgeIndex).toBe(result.destinationSnap.edgeIndex);
+    expect(result.route.graphMeters).toBeCloseTo(60, 3);
+    expect(result.route.totalMeters).toBeCloseTo(85, 3);
+    expect(result.route.graphCoordinates[0]).toEqual(
+      result.originSnap.snappedCoordinate,
+    );
+    expect(result.route.graphCoordinates.at(-1)).toEqual(
+      result.destinationSnap.snappedCoordinate,
+    );
+  });
+
+  test("different buildings snapped to the same edge position still charge connectors", () => {
     const result = routeBuildingToBuilding({
       graph: lineGraph,
       origin: building(1, "A", 14 - 10 / METERS_PER_DEGREE, 121),
@@ -158,9 +184,11 @@ describe("routeBuildingToBuilding", () => {
 
     expect(result.status).toBe("ok");
     if (result.status !== "ok") return;
-    expect(result.originSnap.nodeIndex).toBe(result.destinationSnap.nodeIndex);
-    expect(result.route.graphMeters).toBe(0);
-    expect(result.route.graphSeconds).toBe(0);
+    expect(result.originSnap.snappedCoordinate).toEqual(
+      result.destinationSnap.snappedCoordinate,
+    );
+    expect(result.route.graphMeters).toBeCloseTo(0, 9);
+    expect(result.route.graphSeconds).toBeCloseTo(0, 9);
     expect(result.route.totalMeters).toBeCloseTo(25, 6);
     expect(result.route.totalSeconds).toBeCloseTo(25 / WALK_MPS, 6);
   });
@@ -188,7 +216,7 @@ describe("routeBuildingToBuilding", () => {
     expect(sameLabelDifferentIds.status).toBe("ok");
   });
 
-  test("invalid coordinates fail before nearest-node routing", () => {
+  test("invalid coordinates fail before edge correlation", () => {
     const badOrigin = routeBuildingToBuilding({
       graph: lineGraph,
       origin: building(1, "A", null, 121),
@@ -229,15 +257,12 @@ describe("routeBuildingToBuilding", () => {
     });
     expect(overBoundary.status).toBe("origin-off-network");
     if (overBoundary.status === "origin-off-network") {
-      expect(overBoundary.originSnap.snapMeters).toBeCloseTo(
-        exactSnapMeters,
-        9,
-      );
+      expect(overBoundary.originSnap.snapMeters).toBeCloseTo(exactSnapMeters, 9);
       expect(overBoundary.route).toBeNull();
     }
   });
 
-  test("destination off-network preserves audited origin snap but returns no ETA", () => {
+  test("destination off-network preserves origin edge snap but returns no ETA", () => {
     const result = routeBuildingToBuilding({
       graph: lineGraph,
       origin: building(1, "A", 14, 121),
@@ -247,12 +272,12 @@ describe("routeBuildingToBuilding", () => {
 
     expect(result.status).toBe("destination-off-network");
     if (result.status !== "destination-off-network") return;
-    expect(result.originSnap.nodeIndex).toBe(0);
+    expect(result.originSnap.edgeIndex).toBe(0);
     expect(result.destinationSnap.snapMeters).toBeGreaterThan(100);
     expect(result.route).toBeNull();
   });
 
-  test("nodes outside the largest weak component are off-network even at zero snap", () => {
+  test("edges outside the largest weak component are off-network even at zero snap", () => {
     const withIsland = buildTravelGraph({
       meta: { coordScale: 1e6, nodeCount: 5, edgeCount: 3 },
       nodes: [
@@ -273,28 +298,26 @@ describe("routeBuildingToBuilding", () => {
       1, 1, 1, 0, 0,
     ]);
     expect(isMainWalkComponentNode(withIsland, 3)).toBe(false);
+    expect(isMainWalkComponentEdge(withIsland, 2)).toBe(false);
 
     const destinationIsland = routeBuildingToBuilding({
       graph: withIsland,
       origin: building(1, "A", 14, 121),
-      destination: building(2, "Island B", 14.01, 121),
+      destination: building(2, "Island B", 14.01, 121.0005),
       maxSnapMeters: 10,
     });
     expect(destinationIsland.status).toBe("destination-off-network");
-    if (destinationIsland.status !== "destination-off-network") return;
-    expect(destinationIsland.destinationSnap.snapMeters).toBeCloseTo(0, 9);
-    expect(destinationIsland.route).toBeNull();
 
     const originIsland = routeBuildingToBuilding({
       graph: withIsland,
-      origin: building(2, "Island B", 14.01, 121),
+      origin: building(2, "Island B", 14.01, 121.0005),
       destination: building(1, "A", 14, 121),
       maxSnapMeters: 10,
     });
     expect(originIsland.status).toBe("origin-off-network");
   });
 
-  test("preserves one-way graph direction instead of assuming symmetry", () => {
+  test("preserves one-way direction for virtual positions on the same edge", () => {
     const oneWay = buildTravelGraph({
       meta: { coordScale: 1e6, nodeCount: 2, edgeCount: 1 },
       nodes: [
@@ -304,22 +327,51 @@ describe("routeBuildingToBuilding", () => {
       edges: [[0, 1, 100, "footway", null, [], 1]],
     });
 
+    const forward = routeBuildingToBuilding({
+      graph: oneWay,
+      origin: building(1, "A", 14, 121.0002),
+      destination: building(2, "B", 14, 121.0008),
+      maxSnapMeters: 10,
+    });
+    expect(forward.status).toBe("ok");
+    if (forward.status === "ok") {
+      expect(forward.route.graphMeters).toBeCloseTo(60, 3);
+    }
+
     expect(
       routeBuildingToBuilding({
         graph: oneWay,
-        origin: building(1, "A", 14, 121),
-        destination: building(2, "B", 14, 121.001),
-        maxSnapMeters: 10,
-      }).status,
-    ).toBe("ok");
-    expect(
-      routeBuildingToBuilding({
-        graph: oneWay,
-        origin: building(2, "B", 14, 121.001),
-        destination: building(1, "A", 14, 121),
+        origin: building(1, "A", 14, 121.0008),
+        destination: building(2, "B", 14, 121.0002),
         maxSnapMeters: 10,
       }).status,
     ).toBe("no-route");
+  });
+
+  test("one-way reverse virtual route can use a legitimate return cycle", () => {
+    const cycle = buildTravelGraph({
+      meta: { coordScale: 1e6, nodeCount: 3, edgeCount: 3 },
+      nodes: [
+        [1, 14, 121],
+        [2, 14, 121.001],
+        [3, 14.001, 121.0005],
+      ],
+      edges: [
+        [0, 1, 100, "footway", null, [], 1],
+        [1, 2, 100, "footway", null, [], 1],
+        [2, 0, 100, "footway", null, [], 1],
+      ],
+    });
+    const result = routeBuildingToBuilding({
+      graph: cycle,
+      origin: building(1, "A", 14, 121.0008),
+      destination: building(2, "B", 14, 121.0002),
+      maxSnapMeters: 10,
+    });
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.route.graphMeters).toBeCloseTo(240, 3);
+    }
   });
 
   test("rejects an empty travel graph instead of inventing a route", () => {
@@ -337,6 +389,22 @@ describe("routeBuildingToBuilding", () => {
         maxSnapMeters: 10,
       }),
     ).toThrow("travel graph has no nodes");
+  });
+
+  test("rejects a node-only graph because there is no mapped edge to walk", () => {
+    const noEdges = buildTravelGraph({
+      meta: { coordScale: 1e6, nodeCount: 1, edgeCount: 0 },
+      nodes: [[1, 14, 121]],
+      edges: [],
+    });
+    expect(() =>
+      routeBuildingToBuilding({
+        graph: noEdges,
+        origin: building(1, "A", 14, 121),
+        destination: building(2, "B", 14, 121),
+        maxSnapMeters: 10,
+      }),
+    ).toThrow("travel graph has no edges");
   });
 
   test("rejects malformed graph coordinates instead of snapping through them", () => {

@@ -5,9 +5,14 @@ import {
 } from "@constants/travel-modes";
 import buildingsJson from "../../../exports/deep-research/buildings.json";
 import walkGraphJson from "../../generated/walk-graph.json";
-import { buildTravelGraph, type WalkGraphData } from "./engine";
+import { distanceMeters } from "../campus-route";
 import {
-  isMainWalkComponentNode,
+  buildTravelGraph,
+  nearestNodeIndex,
+  type WalkGraphData,
+} from "./engine";
+import {
+  isMainWalkComponentEdge,
   routeBuildingToBuilding,
   snapBuildingEndpoint,
   type BuildingRouteEndpoint,
@@ -25,8 +30,35 @@ function findBuilding(name: string): BuildingRouteEndpoint {
   return building;
 }
 
+function oldNodeSnapMeters(endpoint: BuildingRouteEndpoint): number {
+  if (endpoint.lat === null || endpoint.lon === null) return Number.POSITIVE_INFINITY;
+  const nodeIndex = nearestNodeIndex(campus, endpoint.lat, endpoint.lon, "walk");
+  return distanceMeters(
+    { lat: endpoint.lat, lon: endpoint.lon },
+    { lat: campus.lat[nodeIndex] as number, lon: campus.lng[nodeIndex] as number },
+  );
+}
+
 describe("building route real campus baseline", () => {
-  test("routes every endpoint inside the current hard snap ceiling to the core", () => {
+  test("edge correlation never makes a pin farther from the network than node snapping", () => {
+    let strictlyImproved = 0;
+    for (const endpoint of buildings) {
+      if (endpoint.lat === null || endpoint.lon === null) continue;
+      const snap = snapBuildingEndpoint(campus, {
+        ...endpoint,
+        lat: endpoint.lat,
+        lon: endpoint.lon,
+      });
+      const previous = oldNodeSnapMeters(endpoint);
+      expect(snap.snapMeters, endpoint.buildingName).toBeLessThanOrEqual(
+        previous + 1e-6,
+      );
+      if (snap.snapMeters < previous - 0.5) strictlyImproved++;
+    }
+    expect(strictlyImproved).toBeGreaterThan(0);
+  });
+
+  test("routes every edge-correlated endpoint inside the hard ceiling to the core", () => {
     const anchor = findBuilding("CAS Main Building");
     let routed = 0;
     let offNetwork = 0;
@@ -53,7 +85,7 @@ describe("building route real campus baseline", () => {
 
       if (
         snap.snapMeters > ENDPOINT_SNAP_TOLERANCE_METERS ||
-        !isMainWalkComponentNode(campus, snap.nodeIndex)
+        !isMainWalkComponentEdge(campus, snap.edgeIndex)
       ) {
         offNetwork++;
         expect(result.status, endpoint.buildingName).toBe("origin-off-network");
@@ -80,19 +112,20 @@ describe("building route real campus baseline", () => {
             WALK_MPS,
         8,
       );
+      expect(result.route.graphCoordinates[0], endpoint.buildingName).toEqual(
+        result.originSnap.snappedCoordinate,
+      );
       expect(
-        result.route.graphCoordinates.length,
+        result.route.graphCoordinates.at(-1),
         endpoint.buildingName,
-      ).toBeGreaterThan(0);
+      ).toEqual(result.destinationSnap.snappedCoordinate);
     }
 
     expect(routed).toBeGreaterThan(0);
-    // The checked-in dataset intentionally includes sites outside the main
-    // campus graph; Pass 0 protects them from inheriting a remote graph node.
     expect(offNetwork).toBeGreaterThan(0);
   });
 
-  test("known off-campus teaching sites fail closed", () => {
+  test("known off-campus teaching sites still fail closed", () => {
     const anchor = findBuilding("CAS Main Building");
     for (const name of ["UPRHS Building", "Veterinary Teaching Hospital"]) {
       const result = routeBuildingToBuilding({
@@ -110,7 +143,7 @@ describe("building route real campus baseline", () => {
     }
   });
 
-  test("a central route uses connector-inclusive canonical totals", () => {
+  test("New Math to Physical Sciences uses shorter edge connectors and continuous mapped geometry", () => {
     const origin = findBuilding("New Math Building");
     const destination = findBuilding("Physical Sciences Building");
     const result = routeBuildingToBuilding({
@@ -122,24 +155,23 @@ describe("building route real campus baseline", () => {
 
     expect(result.status).toBe("ok");
     if (result.status !== "ok") return;
-    expect(result.route.graphMeters).toBeGreaterThan(0);
-    expect(result.route.totalMeters).toBeGreaterThanOrEqual(
-      result.route.graphMeters,
+    expect(result.originSnap.snapMeters).toBeLessThanOrEqual(
+      oldNodeSnapMeters(origin) + 1e-6,
     );
+    expect(result.destinationSnap.snapMeters).toBeLessThanOrEqual(
+      oldNodeSnapMeters(destination) + 1e-6,
+    );
+    expect(result.route.graphMeters).toBeGreaterThan(0);
     expect(result.route.totalSeconds).toBeCloseTo(
-      result.route.graphSeconds +
-        (result.originSnap.snapMeters + result.destinationSnap.snapMeters) /
-          WALK_MPS,
+      result.route.totalMeters / WALK_MPS,
       5,
     );
-    expect(result.route.originConnectorCoordinates[0]).toEqual([
-      origin.lon,
-      origin.lat,
-    ]);
-    expect(result.route.destinationConnectorCoordinates.at(-1)).toEqual([
-      destination.lon,
-      destination.lat,
-    ]);
+    expect(result.route.originConnectorCoordinates.at(-1)).toEqual(
+      result.route.graphCoordinates[0],
+    );
+    expect(result.route.destinationConnectorCoordinates[0]).toEqual(
+      result.route.graphCoordinates.at(-1),
+    );
   });
 
   test("a cross-campus route remains graph-backed and finite", () => {

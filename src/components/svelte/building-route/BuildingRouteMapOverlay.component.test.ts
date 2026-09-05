@@ -70,6 +70,8 @@ import BuildingRouteMapOverlay from "./BuildingRouteMapOverlay.svelte";
 const route: BuildingWalkRoute = {
   graphMeters: 200,
   graphSeconds: 160,
+  originConnectorMeters: 25,
+  destinationConnectorMeters: 25,
   totalMeters: 250,
   totalSeconds: 200,
   graphCoordinates: [
@@ -100,11 +102,41 @@ describe("BuildingRouteMapOverlay", () => {
     });
   });
 
-  test("draws separate graph/connectors, fits them, and restores on style.load", async () => {
+  test("draws connectors below a cased authoritative route and restores on style.load", async () => {
     const { unmount } = render(BuildingRouteMapOverlay);
 
     await waitFor(() => expect(map.addSource).toHaveBeenCalledTimes(2));
-    expect(map.addLayer).toHaveBeenCalledTimes(2);
+    expect(map.addLayer).toHaveBeenCalledTimes(3);
+    expect(map.addLayer.mock.calls.map(([layer]) => layer.id)).toEqual([
+      "building-walk-route-connectors",
+      "building-walk-route-graph-casing",
+      "building-walk-route-graph",
+    ]);
+
+    const connector = map.addLayer.mock.calls[0]?.[0] as {
+      paint?: Record<string, unknown>;
+    };
+    const casing = map.addLayer.mock.calls[1]?.[0] as {
+      paint?: Record<string, unknown>;
+    };
+    const graph = map.addLayer.mock.calls[2]?.[0] as {
+      paint?: Record<string, unknown>;
+    };
+    expect(connector.paint).toMatchObject({
+      "line-color": "#71717a",
+      "line-width": 2,
+      "line-opacity": 0.56,
+      "line-dasharray": [1, 1.5],
+    });
+    expect(casing.paint).toMatchObject({
+      "line-color": "#ffffff",
+      "line-width": 8,
+    });
+    expect(graph.paint).toMatchObject({
+      "line-color": "#8d1437",
+      "line-width": 5,
+    });
+
     expect(map.fitBounds).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ animate: true, duration: 650, maxZoom: 18 }),
@@ -116,16 +148,15 @@ describe("BuildingRouteMapOverlay", () => {
     )?.[1] as (() => void) | undefined;
     expect(styleLoad).toBeDefined();
 
-    // Simulate a full basemap/style replacement removing app-owned layers.
     sources.clear();
     layers.clear();
     styleLoad?.();
     expect(map.addSource).toHaveBeenCalledTimes(4);
-    expect(map.addLayer).toHaveBeenCalledTimes(4);
+    expect(map.addLayer).toHaveBeenCalledTimes(6);
 
     unmount();
     expect(map.off).toHaveBeenCalledWith("style.load", expect.any(Function));
-    expect(map.removeLayer).toHaveBeenCalledTimes(2);
+    expect(map.removeLayer).toHaveBeenCalledTimes(3);
     expect(map.removeSource).toHaveBeenCalledTimes(2);
   });
 

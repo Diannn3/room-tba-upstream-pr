@@ -1,17 +1,28 @@
 import type { FeatureCollection, LineString } from "geojson";
 import type { BuildingWalkRoute } from "./building-route";
 
+export const BUILDING_ROUTE_CONNECTOR_RENDER_MIN_METERS = 1.5;
+
 export function buildingRouteGeoJson(route: BuildingWalkRoute): {
   graph: FeatureCollection<LineString>;
   connectors: FeatureCollection<LineString>;
 } {
+  const connectorEntries = [
+    {
+      meters: route.originConnectorMeters,
+      coordinates: route.originConnectorCoordinates,
+    },
+    {
+      meters: route.destinationConnectorMeters,
+      coordinates: route.destinationConnectorCoordinates,
+    },
+  ];
+
   return {
     graph: {
       type: "FeatureCollection",
-      // GeoJSON LineString requires at least two positions. Different building
-      // pins can legitimately snap to the same graph node, in which case the
-      // authoritative graph segment is zero-length and the route consists only
-      // of the two connector legs. Emit no invalid one-point LineString.
+      // A direct same-position virtual route can legitimately contain one
+      // coordinate. GeoJSON LineString requires at least two positions.
       features:
         route.graphCoordinates.length >= 2
           ? [
@@ -28,14 +39,19 @@ export function buildingRouteGeoJson(route: BuildingWalkRoute): {
     },
     connectors: {
       type: "FeatureCollection",
-      features: [
-        route.originConnectorCoordinates,
-        route.destinationConnectorCoordinates,
-      ].map((coordinates) => ({
-        type: "Feature" as const,
-        properties: {},
-        geometry: { type: "LineString" as const, coordinates },
-      })),
+      // Preserve tiny connector cost in route totals, but do not render a
+      // sub-pixel dashed artifact when the pin is effectively on the path.
+      features: connectorEntries
+        .filter(
+          ({ meters, coordinates }) =>
+            meters >= BUILDING_ROUTE_CONNECTOR_RENDER_MIN_METERS &&
+            coordinates.length >= 2,
+        )
+        .map(({ coordinates }) => ({
+          type: "Feature" as const,
+          properties: {},
+          geometry: { type: "LineString" as const, coordinates },
+        })),
     },
   };
 }

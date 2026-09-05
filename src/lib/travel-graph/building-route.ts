@@ -2,20 +2,21 @@
  * Pure building-to-building walking routes over Room TBA's vendored campus
  * path graph.
  *
- * This deliberately sits above the generic graph engine instead of the
- * multi-modal journey planner: building routing is walking-only, has an
- * explicit origin and destination, never asks for GPS, and never falls back
- * to OSRM/Haversine when the mapped graph cannot support an endpoint.
- *
- * Endpoint connectors are straight pin<->graph-node approximations. They are
- * included in distance/time so an off-path building pin does not inherit a
- * zero-cost connection to the graph, but they must not be described as
- * surveyed entrances or mapped pedestrian geometry.
+ * Building pins correlate to the closest point on a mapped graph edge, not
+ * merely to the closest junction node. The query remains entirely local: each
+ * snapped endpoint is treated as a lightweight virtual position on its edge,
+ * with partial-edge legs feeding the existing target-bounded Dijkstra engine.
  */
 
 import { WALK_KPH } from "@constants/travel-modes";
-import { distanceMeters } from "../campus-route";
-import { nearestNodeIndex, shortestPath, type TravelGraph } from "./engine";
+import {
+  edgeGeometryBetweenSnaps,
+  edgeGeometryNodeToSnap,
+  edgeGeometrySnapToNode,
+  nearestEdgeSnap,
+  type GraphEdgeSnap,
+} from "./edge-snap";
+import { shortestPath, type TravelGraph } from "./engine";
 
 export type BuildingRouteEndpoint = {
   id: number;
@@ -26,32 +27,35 @@ export type BuildingRouteEndpoint = {
 
 export type BuildingRouteCoordinate = [lng: number, lat: number];
 
-export type BuildingEndpointSnap = {
-  nodeIndex: number;
-  /** Straight-line pin -> snapped graph node distance. */
-  snapMeters: number;
-  nodeCoordinate: BuildingRouteCoordinate;
-  /** Always endpoint pin -> snapped graph node. */
-  endpointToNodeCoordinates: [BuildingRouteCoordinate, BuildingRouteCoordinate];
+export type BuildingEndpointSnap = GraphEdgeSnap & {
+  /** Always endpoint pin -> snapped point on the mapped edge. */
+  endpointToEdgeCoordinates: [
+    BuildingRouteCoordinate,
+    BuildingRouteCoordinate,
+  ];
 };
 
 export type BuildingWalkRoute = {
-  /** Mapped walk-graph segment only. */
+  /** Mapped walk-graph geometry, including partial endpoint edges. */
   graphMeters: number;
-  /** Mapped walk-graph segment only. */
+  /** Mapped walk-graph time only. */
   graphSeconds: number;
-  /** Pin connector + graph + pin connector. */
+  /** Approximate origin pin -> mapped edge distance. */
+  originConnectorMeters: number;
+  /** Approximate mapped edge -> destination pin distance. */
+  destinationConnectorMeters: number;
+  /** Pin connector + mapped graph + pin connector. */
   totalMeters: number;
-  /** Pin connector + graph + pin connector, all at WALK_KPH. */
+  /** Pin connector + mapped graph + pin connector, all at WALK_KPH. */
   totalSeconds: number;
-  /** Authoritative mapped walking geometry only. */
+  /** Authoritative mapped walking geometry, virtual edge snap -> edge snap. */
   graphCoordinates: BuildingRouteCoordinate[];
-  /** Approximate origin pin -> graph node connector. */
+  /** Approximate origin pin -> mapped edge connector. */
   originConnectorCoordinates: [
     BuildingRouteCoordinate,
     BuildingRouteCoordinate,
   ];
-  /** Approximate graph node -> destination pin connector. */
+  /** Approximate mapped edge -> destination pin connector. */
   destinationConnectorCoordinates: [
     BuildingRouteCoordinate,
     BuildingRouteCoordinate,
@@ -72,9 +76,7 @@ type BuildingRouteBase = {
   destinationBuildingId: number;
   /** The evidence-backed hard ceiling supplied by the endpoint-audit policy. */
   maxSnapMeters: number;
-  /**
-   * Captured for debugging/provenance; display copy should stay approximate.
-   */
+  /** Captured for debugging/provenance; display copy stays approximate. */
   walkingSpeedKph: number;
 };
 
@@ -114,27 +116,18 @@ export type RouteBuildingToBuildingInput = {
   graph: TravelGraph;
   origin: BuildingRouteEndpoint;
   destination: BuildingRouteEndpoint;
-  /**
-   * Hard route-eligibility ceiling established by the endpoint audit.
-   * Required on purpose: this core must not silently choose a policy that the
-   * building dataset has not justified.
-   */
+  /** Hard route-eligibility ceiling established by the endpoint audit. */
   maxSnapMeters: number;
 };
 
 const WALK_MPS = WALK_KPH / 3.6;
-
+const EDGE_POSITION_EPSILON_METERS = 1e-7;
 const mainComponentCache = new WeakMap<TravelGraph, Uint8Array>();
 
 /**
  * Weak-component eligibility shared with the endpoint-audit semantics.
- *
- * The walk graph may contain tiny disconnected islands. A building snapped to
- * one of those islands is not a usable campus-routing endpoint even when the
- * pin is physically close to that island. Treat only the largest weak
- * component as the canonical campus network and cache the mask per immutable
- * graph instance. Edges are considered undirected here intentionally: route
- * directionality is still enforced later by shortestPath().
+ * Directionality is ignored only for component membership; shortestPath still
+ * enforces one-way traversal later.
  */
 export function mainWalkComponentMask(graph: TravelGraph): Uint8Array {
   const cached = mainComponentCache.get(graph);
@@ -191,7 +184,6 @@ export function mainWalkComponentMask(graph: TravelGraph): Uint8Array {
   let mainSize = -1;
   for (let id = 0; id < sizes.length; id++) {
     const size = sizes[id] ?? 0;
-    // Strictly greater preserves the audit's first-component tie behaviour.
     if (size > mainSize) {
       mainSize = size;
       mainComponentId = id;
@@ -213,6 +205,16 @@ export function isMainWalkComponentNode(
   nodeIndex: number,
 ): boolean {
   return mainWalkComponentMask(graph)[nodeIndex] === 1;
+}
+
+export function isMainWalkComponentEdge(
+  graph: TravelGraph,
+  edgeIndex: number,
+): boolean {
+  const edge = graph.edges[edgeIndex];
+  if (!edge) return false;
+  const mask = mainWalkComponentMask(graph);
+  return mask[edge[0]] === 1 && mask[edge[1]] === 1;
 }
 
 export function isValidBuildingRouteCoordinate(
@@ -268,36 +270,157 @@ function assertGraphHasNodes(graph: TravelGraph): void {
   }
 }
 
-/** Snap a valid building pin to the closest walking-graph node. */
+/** Snap a valid building pin to the closest point on the walking graph. */
 export function snapBuildingEndpoint(
   graph: TravelGraph,
   endpoint: BuildingRouteEndpoint & { lat: number; lon: number },
 ): BuildingEndpointSnap {
   assertGraphHasNodes(graph);
-  const nodeIndex = nearestNodeIndex(graph, endpoint.lat, endpoint.lon, "walk");
-  const nodeLng = graph.lng[nodeIndex];
-  const nodeLat = graph.lat[nodeIndex];
-  if (nodeLng === undefined || nodeLat === undefined) {
-    throw new Error(
-      `building route: nearest node ${nodeIndex} is out of bounds`,
-    );
-  }
-  const nodeCoordinate: BuildingRouteCoordinate = [nodeLng, nodeLat];
+  // Validate topology before edge decoding so malformed node references fail
+  // with the same explicit structural error as component membership checks.
+  mainWalkComponentMask(graph);
+  const snap = nearestEdgeSnap(graph, endpoint);
   const endpointCoordinate: BuildingRouteCoordinate = [
     endpoint.lon,
     endpoint.lat,
   ];
-  const snapMeters = distanceMeters(
-    { lat: endpoint.lat, lon: endpoint.lon },
-    { lat: nodeCoordinate[1], lon: nodeCoordinate[0] },
-  );
-
   return {
-    nodeIndex,
-    snapMeters,
-    nodeCoordinate,
-    endpointToNodeCoordinates: [endpointCoordinate, nodeCoordinate],
+    ...snap,
+    endpointToEdgeCoordinates: [endpointCoordinate, snap.snappedCoordinate],
   };
+}
+
+type VirtualNodeLeg = {
+  nodeIndex: number;
+  meters: number;
+  coordinates: BuildingRouteCoordinate[];
+};
+
+type GraphRouteCandidate = {
+  meters: number;
+  coordinates: BuildingRouteCoordinate[];
+};
+
+function sameCoordinate(
+  a: BuildingRouteCoordinate,
+  b: BuildingRouteCoordinate,
+): boolean {
+  return Math.abs(a[0] - b[0]) <= 1e-12 && Math.abs(a[1] - b[1]) <= 1e-12;
+}
+
+function concatCoordinatePaths(
+  ...paths: BuildingRouteCoordinate[][]
+): BuildingRouteCoordinate[] {
+  const result: BuildingRouteCoordinate[] = [];
+  for (const path of paths) {
+    for (const coordinate of path) {
+      const previous = result.at(-1);
+      if (!previous || !sameCoordinate(previous, coordinate)) {
+        result.push(coordinate);
+      }
+    }
+  }
+  return result;
+}
+
+function dedupeLegs(legs: VirtualNodeLeg[]): VirtualNodeLeg[] {
+  const bestByNode = new Map<number, VirtualNodeLeg>();
+  for (const leg of legs) {
+    const previous = bestByNode.get(leg.nodeIndex);
+    if (!previous || leg.meters < previous.meters) {
+      bestByNode.set(leg.nodeIndex, leg);
+    }
+  }
+  return [...bestByNode.values()];
+}
+
+function originExitLegs(
+  graph: TravelGraph,
+  snap: BuildingEndpointSnap,
+): VirtualNodeLeg[] {
+  const legs: VirtualNodeLeg[] = [];
+  if (!snap.oneway || snap.edgeMetersFromU <= EDGE_POSITION_EPSILON_METERS) {
+    legs.push({
+      nodeIndex: snap.uNodeIndex,
+      meters: snap.edgeMetersFromU,
+      coordinates: edgeGeometrySnapToNode(graph, snap, snap.uNodeIndex),
+    });
+  }
+  // On a stored u -> v one-way edge, a virtual origin may always continue to v.
+  legs.push({
+    nodeIndex: snap.vNodeIndex,
+    meters: snap.edgeMetersToV,
+    coordinates: edgeGeometrySnapToNode(graph, snap, snap.vNodeIndex),
+  });
+  return dedupeLegs(legs);
+}
+
+function destinationEntryLegs(
+  graph: TravelGraph,
+  snap: BuildingEndpointSnap,
+): VirtualNodeLeg[] {
+  const legs: VirtualNodeLeg[] = [
+    {
+      nodeIndex: snap.uNodeIndex,
+      meters: snap.edgeMetersFromU,
+      coordinates: edgeGeometryNodeToSnap(graph, snap, snap.uNodeIndex),
+    },
+  ];
+  if (!snap.oneway || snap.edgeMetersToV <= EDGE_POSITION_EPSILON_METERS) {
+    legs.push({
+      nodeIndex: snap.vNodeIndex,
+      meters: snap.edgeMetersToV,
+      coordinates: edgeGeometryNodeToSnap(graph, snap, snap.vNodeIndex),
+    });
+  }
+  return dedupeLegs(legs);
+}
+
+function sameEdgeDirectCandidate(
+  graph: TravelGraph,
+  origin: BuildingEndpointSnap,
+  destination: BuildingEndpointSnap,
+): GraphRouteCandidate | null {
+  if (origin.edgeIndex !== destination.edgeIndex) return null;
+  const delta = destination.edgeMetersFromU - origin.edgeMetersFromU;
+  if (origin.oneway && delta < -EDGE_POSITION_EPSILON_METERS) return null;
+  return {
+    meters: Math.abs(delta),
+    coordinates: edgeGeometryBetweenSnaps(graph, origin, destination),
+  };
+}
+
+function routeBetweenEdgeSnaps(
+  graph: TravelGraph,
+  origin: BuildingEndpointSnap,
+  destination: BuildingEndpointSnap,
+): GraphRouteCandidate | null {
+  let best = sameEdgeDirectCandidate(graph, origin, destination);
+
+  for (const originLeg of originExitLegs(graph, origin)) {
+    for (const destinationLeg of destinationEntryLegs(graph, destination)) {
+      const middle = shortestPath(
+        graph,
+        originLeg.nodeIndex,
+        destinationLeg.nodeIndex,
+        "walk",
+      );
+      if (!middle) continue;
+      const candidate: GraphRouteCandidate = {
+        meters: originLeg.meters + middle.meters + destinationLeg.meters,
+        coordinates: concatCoordinatePaths(
+          originLeg.coordinates,
+          middle.coordinates,
+          destinationLeg.coordinates,
+        ),
+      };
+      if (!best || candidate.meters < best.meters - EDGE_POSITION_EPSILON_METERS) {
+        best = candidate;
+      }
+    }
+  }
+
+  return best;
 }
 
 /**
@@ -305,7 +428,8 @@ export function snapBuildingEndpoint(
  *
  * No network request, no multi-modal alternatives, and no straight-line route
  * fallback. The only straight segments are the explicitly exposed endpoint
- * connectors whose cost is included in the canonical totals.
+ * connectors; the authoritative route starts/ends at virtual positions on
+ * mapped graph edges.
  */
 export function routeBuildingToBuilding({
   graph,
@@ -322,8 +446,6 @@ export function routeBuildingToBuilding({
     walkingSpeedKph: WALK_KPH,
   };
 
-  // Identity, not label text, determines whether both selections are the same
-  // building. No outdoor graph route is useful in this state.
   if (origin.id === destination.id) {
     return {
       ...base,
@@ -356,7 +478,7 @@ export function routeBuildingToBuilding({
   const originSnap = snapBuildingEndpoint(graph, origin);
   if (
     originSnap.snapMeters > maxSnapMeters ||
-    !isMainWalkComponentNode(graph, originSnap.nodeIndex)
+    !isMainWalkComponentEdge(graph, originSnap.edgeIndex)
   ) {
     return {
       ...base,
@@ -370,7 +492,7 @@ export function routeBuildingToBuilding({
   const destinationSnap = snapBuildingEndpoint(graph, destination);
   if (
     destinationSnap.snapMeters > maxSnapMeters ||
-    !isMainWalkComponentNode(graph, destinationSnap.nodeIndex)
+    !isMainWalkComponentEdge(graph, destinationSnap.edgeIndex)
   ) {
     return {
       ...base,
@@ -381,15 +503,7 @@ export function routeBuildingToBuilding({
     };
   }
 
-  // Reuse the existing target-bounded Dijkstra implementation. This preserves
-  // one-way semantics and guarantees the rendered graph path is the same path
-  // whose metrics feed the estimate.
-  const graphRoute = shortestPath(
-    graph,
-    originSnap.nodeIndex,
-    destinationSnap.nodeIndex,
-    "walk",
-  );
+  const graphRoute = routeBetweenEdgeSnaps(graph, originSnap, destinationSnap);
   if (!graphRoute) {
     return {
       ...base,
@@ -401,6 +515,7 @@ export function routeBuildingToBuilding({
   }
 
   const connectorMeters = originSnap.snapMeters + destinationSnap.snapMeters;
+  const graphSeconds = graphRoute.meters / WALK_MPS;
   const connectorSeconds = connectorMeters / WALK_MPS;
 
   return {
@@ -410,14 +525,16 @@ export function routeBuildingToBuilding({
     destinationSnap,
     route: {
       graphMeters: graphRoute.meters,
-      graphSeconds: graphRoute.seconds,
+      graphSeconds,
+      originConnectorMeters: originSnap.snapMeters,
+      destinationConnectorMeters: destinationSnap.snapMeters,
       totalMeters: graphRoute.meters + connectorMeters,
-      totalSeconds: graphRoute.seconds + connectorSeconds,
+      totalSeconds: graphSeconds + connectorSeconds,
       graphCoordinates: graphRoute.coordinates,
-      originConnectorCoordinates: originSnap.endpointToNodeCoordinates,
+      originConnectorCoordinates: originSnap.endpointToEdgeCoordinates,
       destinationConnectorCoordinates: [
-        destinationSnap.nodeCoordinate,
-        destinationSnap.endpointToNodeCoordinates[0],
+        destinationSnap.snappedCoordinate,
+        destinationSnap.endpointToEdgeCoordinates[0],
       ],
     },
   };

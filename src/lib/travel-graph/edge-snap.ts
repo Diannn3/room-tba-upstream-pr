@@ -38,6 +38,76 @@ const edgeGeometryIndexCache = new WeakMap<
   EdgeGeometryIndexEntry[]
 >();
 const mainComponentEdgeMaskCache = new WeakMap<TravelGraph, Uint8Array>();
+const validatedEdgeSnapGraphCache = new WeakSet<TravelGraph>();
+
+function assertEdgeSnapGraph(graph: TravelGraph): void {
+  if (validatedEdgeSnapGraphCache.has(graph)) return;
+
+  const nodeCount = graph.lat.length;
+  if (graph.lng.length !== nodeCount) {
+    throw new Error(
+      "building route: graph coordinate arrays have different lengths",
+    );
+  }
+  if (!Number.isFinite(graph.coordScale) || graph.coordScale <= 0) {
+    throw new Error(
+      "building route: graph coordScale must be a finite positive number",
+    );
+  }
+
+  for (let nodeIndex = 0; nodeIndex < nodeCount; nodeIndex++) {
+    const lat = graph.lat[nodeIndex];
+    const lng = graph.lng[nodeIndex];
+    if (
+      lat === undefined ||
+      lng === undefined ||
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lng) ||
+      lat < -90 ||
+      lat > 90 ||
+      lng < -180 ||
+      lng > 180
+    ) {
+      throw new Error(
+        `building route: graph node ${nodeIndex} has invalid coordinates`,
+      );
+    }
+  }
+
+  for (let edgeIndex = 0; edgeIndex < graph.edges.length; edgeIndex++) {
+    const edge = graph.edges[edgeIndex];
+    if (!edge) {
+      throw new Error(`building route: graph edge ${edgeIndex} is missing`);
+    }
+    const [u, v, meters, , , deltas] = edge;
+    if (
+      !Number.isInteger(u) ||
+      !Number.isInteger(v) ||
+      u < 0 ||
+      v < 0 ||
+      u >= nodeCount ||
+      v >= nodeCount
+    ) {
+      throw new Error("building route: graph contains an out-of-range edge");
+    }
+    if (!Number.isFinite(meters) || meters < 0) {
+      throw new Error(
+        `building route: graph edge ${edgeIndex} has invalid distance`,
+      );
+    }
+    if (
+      !Array.isArray(deltas) ||
+      deltas.length % 2 !== 0 ||
+      deltas.some((value) => !Number.isFinite(value))
+    ) {
+      throw new Error(
+        `building route: graph edge ${edgeIndex} has invalid geometry deltas`,
+      );
+    }
+  }
+
+  validatedEdgeSnapGraphCache.add(graph);
+}
 
 function sameCoordinate(
   a: EdgeSnapCoordinate,
@@ -209,6 +279,7 @@ export function nearestEdgeSnap(
     throw new Error("building route: travel graph has no edges");
   }
 
+  assertEdgeSnapGraph(graph);
   const indexed = edgeGeometryIndex(graph);
   const eligibleEdges = mainComponentEdgeMask(graph);
   let best:
@@ -258,7 +329,9 @@ export function nearestEdgeSnap(
   }
 
   if (!best) {
-    throw new Error("building route: walk graph has no usable main-component edge geometry");
+    throw new Error(
+      "building route: walk graph has no usable main-component edge geometry",
+    );
   }
 
   const edge = graph.edges[best.edgeIndex];

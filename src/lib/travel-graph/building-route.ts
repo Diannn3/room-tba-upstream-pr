@@ -123,6 +123,7 @@ export type RouteBuildingToBuildingInput = {
 const WALK_MPS = WALK_KPH / 3.6;
 const EDGE_POSITION_EPSILON_METERS = 1e-7;
 const mainComponentCache = new WeakMap<TravelGraph, Uint8Array>();
+const validatedAdjacencyCache = new WeakSet<TravelGraph>();
 
 /**
  * Weak-component eligibility shared with the endpoint-audit semantics.
@@ -268,6 +269,62 @@ function assertGraphHasNodes(graph: TravelGraph): void {
       );
     }
   }
+}
+
+function assertGraphAdjacency(graph: TravelGraph): void {
+  if (validatedAdjacencyCache.has(graph)) return;
+  const nodeCount = graph.lat.length;
+  if (graph.adjacency.length !== nodeCount) {
+    throw new Error(
+      "building route: graph adjacency length does not match node count",
+    );
+  }
+
+  const forwardSeen = new Uint8Array(graph.edges.length);
+  const reverseSeen = new Uint8Array(graph.edges.length);
+  for (let nodeIndex = 0; nodeIndex < graph.adjacency.length; nodeIndex++) {
+    for (const halfEdge of graph.adjacency[nodeIndex] ?? []) {
+      const { edge: edgeIndex, to } = halfEdge;
+      const edge = graph.edges[edgeIndex];
+      if (
+        !Number.isInteger(edgeIndex) ||
+        !Number.isInteger(to) ||
+        !edge ||
+        to < 0 ||
+        to >= nodeCount
+      ) {
+        throw new Error(
+          "building route: graph adjacency contains an invalid half-edge",
+        );
+      }
+      const [u, v, , , , , oneway] = edge;
+      if (nodeIndex === u && to === v) {
+        forwardSeen[edgeIndex] = 1;
+        continue;
+      }
+      if (!oneway && nodeIndex === v && to === u) {
+        reverseSeen[edgeIndex] = 1;
+        continue;
+      }
+      throw new Error(
+        `building route: graph adjacency is inconsistent for edge ${edgeIndex}`,
+      );
+    }
+  }
+
+  for (let edgeIndex = 0; edgeIndex < graph.edges.length; edgeIndex++) {
+    const edge = graph.edges[edgeIndex];
+    if (!edge) continue;
+    if (
+      forwardSeen[edgeIndex] !== 1 ||
+      (!edge[6] && reverseSeen[edgeIndex] !== 1)
+    ) {
+      throw new Error(
+        `building route: graph adjacency is incomplete for edge ${edgeIndex}`,
+      );
+    }
+  }
+  validatedAdjacencyCache.add(graph);
 }
 
 /** Snap a valid building pin to the closest point on the walking graph. */
@@ -474,6 +531,10 @@ export function routeBuildingToBuilding({
       route: null,
     };
   }
+
+  // The shared travel engine trusts generated input. This feature's contract is
+  // stricter: malformed topology must fail closed before Dijkstra can consume it.
+  assertGraphAdjacency(graph);
 
   const originSnap = snapBuildingEndpoint(graph, origin);
   if (

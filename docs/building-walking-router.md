@@ -46,19 +46,23 @@ across roads, labels, and building fills.
 ## Audit and calibration
 
 The original endpoint audit established the hard snap ceiling against junction
-nodes. Edge correlation can only shorten the geometric pin-to-network
-connector, so the ceiling is intentionally unchanged. Use the comparison audit
-to quantify the improvement and detect any eligibility change:
+nodes. For a building whose legacy nearest node is already in the largest weak
+component, correlation to the nearest point on that same canonical network can
+only preserve or shorten the connector. A closer node or edge on a disconnected
+island is deliberately ignored, so those exceptional endpoints can become
+farther away and fail closed instead. The 250 m ceiling therefore remains an
+absolute access-honesty policy, not an assumption that every connector improves.
+Use the comparison audit to quantify the change and detect eligibility shifts:
 
 ```sh
 bun scripts/building-edge-snap-audit.ts
 bun scripts/building-edge-snap-audit.ts --json
 ```
 
-The real-campus baseline also asserts that every edge snap is no farther from a
-building pin than the legacy nearest-node snap, that known off-campus teaching
-sites still fail closed, and that New Math → Physical Sciences joins connector
-and mapped geometry without a gap.
+The real-campus baseline asserts the monotonic connector rule only for legacy
+nearest-node endpoints that were already on the canonical main component. It
+also checks that known off-campus teaching sites still fail closed and that New
+Math → Physical Sciences joins connector and mapped geometry without a gap.
 
 ## Product boundaries
 
@@ -82,6 +86,7 @@ Feature-focused checks:
 ```sh
 bun test src/lib/travel-graph/edge-snap.test.ts \
   src/lib/travel-graph/building-route.test.ts \
+  src/lib/travel-graph/building-route-structural.test.ts \
   src/lib/travel-graph/building-route-map.test.ts \
   src/lib/travel-graph/building-route.baseline.test.ts
 bunx vitest run \

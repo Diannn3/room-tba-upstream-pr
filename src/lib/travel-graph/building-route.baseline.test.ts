@@ -13,6 +13,7 @@ import {
 } from "./engine";
 import {
   isMainWalkComponentEdge,
+  isMainWalkComponentNode,
   routeBuildingToBuilding,
   snapBuildingEndpoint,
   type BuildingRouteEndpoint,
@@ -30,31 +31,51 @@ function findBuilding(name: string): BuildingRouteEndpoint {
   return building;
 }
 
-function oldNodeSnapMeters(endpoint: BuildingRouteEndpoint): number {
-  if (endpoint.lat === null || endpoint.lon === null) return Number.POSITIVE_INFINITY;
+function oldNodeSnap(endpoint: BuildingRouteEndpoint): {
+  nodeIndex: number;
+  snapMeters: number;
+} {
+  if (endpoint.lat === null || endpoint.lon === null) {
+    return { nodeIndex: -1, snapMeters: Number.POSITIVE_INFINITY };
+  }
   const nodeIndex = nearestNodeIndex(campus, endpoint.lat, endpoint.lon, "walk");
-  return distanceMeters(
-    { lat: endpoint.lat, lon: endpoint.lon },
-    { lat: campus.lat[nodeIndex] as number, lon: campus.lng[nodeIndex] as number },
-  );
+  return {
+    nodeIndex,
+    snapMeters: distanceMeters(
+      { lat: endpoint.lat, lon: endpoint.lon },
+      {
+        lat: campus.lat[nodeIndex] as number,
+        lon: campus.lng[nodeIndex] as number,
+      },
+    ),
+  };
+}
+
+function oldNodeSnapMeters(endpoint: BuildingRouteEndpoint): number {
+  return oldNodeSnap(endpoint).snapMeters;
 }
 
 describe("building route real campus baseline", () => {
-  test("edge correlation never makes a pin farther from the network than node snapping", () => {
+  test("edge correlation shortens or preserves connectors for legacy main-component endpoints", () => {
+    let comparable = 0;
     let strictlyImproved = 0;
     for (const endpoint of buildings) {
       if (endpoint.lat === null || endpoint.lon === null) continue;
+      const previous = oldNodeSnap(endpoint);
+      if (!isMainWalkComponentNode(campus, previous.nodeIndex)) continue;
+
+      comparable++;
       const snap = snapBuildingEndpoint(campus, {
         ...endpoint,
         lat: endpoint.lat,
         lon: endpoint.lon,
       });
-      const previous = oldNodeSnapMeters(endpoint);
       expect(snap.snapMeters, endpoint.buildingName).toBeLessThanOrEqual(
-        previous + 1e-6,
+        previous.snapMeters + 1e-6,
       );
-      if (snap.snapMeters < previous - 0.5) strictlyImproved++;
+      if (snap.snapMeters < previous.snapMeters - 0.5) strictlyImproved++;
     }
+    expect(comparable).toBeGreaterThan(0);
     expect(strictlyImproved).toBeGreaterThan(0);
   });
 

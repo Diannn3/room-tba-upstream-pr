@@ -37,6 +37,7 @@ const edgeGeometryIndexCache = new WeakMap<
   TravelGraph,
   EdgeGeometryIndexEntry[]
 >();
+const mainComponentEdgeMaskCache = new WeakMap<TravelGraph, Uint8Array>();
 
 function sameCoordinate(
   a: EdgeSnapCoordinate,
@@ -122,7 +123,84 @@ function edgeGeometryIndex(graph: TravelGraph): EdgeGeometryIndexEntry[] {
   return entries;
 }
 
-/** Find the geometrically closest point on any walk-graph edge. */
+/**
+ * Canonical endpoint correlation ignores tiny disconnected graph islands. This
+ * mask intentionally mirrors the building router's weak-component policy: edge
+ * direction is irrelevant for membership, but remains authoritative later when
+ * the virtual query is routed.
+ */
+function mainComponentEdgeMask(graph: TravelGraph): Uint8Array {
+  const cached = mainComponentEdgeMaskCache.get(graph);
+  if (cached) return cached;
+
+  const nodeCount = graph.lat.length;
+  const neighbors: number[][] = Array.from({ length: nodeCount }, () => []);
+  for (const edge of graph.edges) {
+    const [u, v] = edge;
+    if (
+      !Number.isInteger(u) ||
+      !Number.isInteger(v) ||
+      u < 0 ||
+      v < 0 ||
+      u >= nodeCount ||
+      v >= nodeCount
+    ) {
+      throw new Error("building route: graph contains an out-of-range edge");
+    }
+    neighbors[u]?.push(v);
+    neighbors[v]?.push(u);
+  }
+
+  const component = new Int32Array(nodeCount).fill(-1);
+  const sizes: number[] = [];
+  let componentId = 0;
+  for (let start = 0; start < nodeCount; start++) {
+    if (component[start] !== -1) continue;
+    const stack = [start];
+    component[start] = componentId;
+    let size = 0;
+    while (stack.length > 0) {
+      const node = stack.pop();
+      if (node === undefined) break;
+      size += 1;
+      for (const next of neighbors[node] ?? []) {
+        if (component[next] !== -1) continue;
+        component[next] = componentId;
+        stack.push(next);
+      }
+    }
+    sizes.push(size);
+    componentId += 1;
+  }
+
+  let mainComponentId = -1;
+  let mainSize = -1;
+  for (let id = 0; id < sizes.length; id++) {
+    const size = sizes[id] ?? 0;
+    if (size > mainSize) {
+      mainSize = size;
+      mainComponentId = id;
+    }
+  }
+
+  const mask = new Uint8Array(graph.edges.length);
+  if (mainComponentId >= 0) {
+    for (let edgeIndex = 0; edgeIndex < graph.edges.length; edgeIndex++) {
+      const edge = graph.edges[edgeIndex];
+      if (
+        edge &&
+        component[edge[0]] === mainComponentId &&
+        component[edge[1]] === mainComponentId
+      ) {
+        mask[edgeIndex] = 1;
+      }
+    }
+  }
+  mainComponentEdgeMaskCache.set(graph, mask);
+  return mask;
+}
+
+/** Find the closest point on the canonical main-component walk-edge geometry. */
 export function nearestEdgeSnap(
   graph: TravelGraph,
   point: { lat: number; lon: number },
@@ -132,6 +210,7 @@ export function nearestEdgeSnap(
   }
 
   const indexed = edgeGeometryIndex(graph);
+  const eligibleEdges = mainComponentEdgeMask(graph);
   let best:
     | {
         edgeIndex: number;
@@ -142,6 +221,7 @@ export function nearestEdgeSnap(
     | undefined;
 
   for (let edgeIndex = 0; edgeIndex < graph.edges.length; edgeIndex++) {
+    if (eligibleEdges[edgeIndex] !== 1) continue;
     const entry = indexed[edgeIndex];
     if (!entry || entry.coordinates.length < 2) continue;
 
@@ -156,7 +236,8 @@ export function nearestEdgeSnap(
       const projection = projectPointToSegmentMeters(point, a, b);
       if (
         best &&
-        projection.distanceMeters >= best.projection.distanceMeters - SNAP_EPSILON_METERS
+        projection.distanceMeters >=
+          best.projection.distanceMeters - SNAP_EPSILON_METERS
       ) {
         continue;
       }
@@ -177,7 +258,7 @@ export function nearestEdgeSnap(
   }
 
   if (!best) {
-    throw new Error("building route: walk graph has no usable edge geometry");
+    throw new Error("building route: walk graph has no usable main-component edge geometry");
   }
 
   const edge = graph.edges[best.edgeIndex];
@@ -189,7 +270,10 @@ export function nearestEdgeSnap(
   const [uNodeIndex, vNodeIndex, graphMeters] = edge;
   const fractionAlongEdge =
     entry.geometryMeters > 0
-      ? Math.min(1, Math.max(0, best.geometryMetersFromU / entry.geometryMeters))
+      ? Math.min(
+          1,
+          Math.max(0, best.geometryMetersFromU / entry.geometryMeters),
+        )
       : 0;
   const edgeMetersFromU = graphMeters * fractionAlongEdge;
   const edgeMetersToV = Math.max(0, graphMeters - edgeMetersFromU);
@@ -206,7 +290,10 @@ export function nearestEdgeSnap(
     edgeMetersFromU,
     edgeMetersToV,
     geometryMetersFromU: best.geometryMetersFromU,
-    geometryMetersToV: Math.max(0, entry.geometryMeters - best.geometryMetersFromU),
+    geometryMetersToV: Math.max(
+      0,
+      entry.geometryMeters - best.geometryMetersFromU,
+    ),
     fractionAlongEdge,
   };
 }
@@ -216,7 +303,9 @@ function coordinatesFromUToSnap(
   snap: GraphEdgeSnap,
 ): EdgeSnapCoordinate[] {
   const entry = edgeGeometryIndex(graph)[snap.edgeIndex];
-  if (!entry) throw new Error("building route: snapped edge geometry is missing");
+  if (!entry) {
+    throw new Error("building route: snapped edge geometry is missing");
+  }
   const result: EdgeSnapCoordinate[] = [];
   for (let i = 0; i <= snap.segmentIndex; i++) {
     const coordinate = entry.coordinates[i];
@@ -231,7 +320,9 @@ function coordinatesFromSnapToV(
   snap: GraphEdgeSnap,
 ): EdgeSnapCoordinate[] {
   const entry = edgeGeometryIndex(graph)[snap.edgeIndex];
-  if (!entry) throw new Error("building route: snapped edge geometry is missing");
+  if (!entry) {
+    throw new Error("building route: snapped edge geometry is missing");
+  }
   const result: EdgeSnapCoordinate[] = [snap.snappedCoordinate];
   for (let i = snap.segmentIndex + 1; i < entry.coordinates.length; i++) {
     const coordinate = entry.coordinates[i];
@@ -278,7 +369,10 @@ export function edgeGeometryBetweenSnaps(
     throw new Error("building route: edge snaps belong to different edges");
   }
 
-  if (Math.abs(from.geometryMetersFromU - to.geometryMetersFromU) <= SNAP_EPSILON_METERS) {
+  if (
+    Math.abs(from.geometryMetersFromU - to.geometryMetersFromU) <=
+    SNAP_EPSILON_METERS
+  ) {
     return [from.snappedCoordinate];
   }
 
@@ -287,10 +381,16 @@ export function edgeGeometryBetweenSnaps(
   }
 
   const entry = edgeGeometryIndex(graph)[from.edgeIndex];
-  if (!entry) throw new Error("building route: snapped edge geometry is missing");
+  if (!entry) {
+    throw new Error("building route: snapped edge geometry is missing");
+  }
   const result: EdgeSnapCoordinate[] = [from.snappedCoordinate];
 
-  for (let vertexIndex = from.segmentIndex + 1; vertexIndex <= to.segmentIndex; vertexIndex++) {
+  for (
+    let vertexIndex = from.segmentIndex + 1;
+    vertexIndex <= to.segmentIndex;
+    vertexIndex++
+  ) {
     const vertex = entry.coordinates[vertexIndex];
     if (vertex) appendCoordinate(result, vertex);
   }

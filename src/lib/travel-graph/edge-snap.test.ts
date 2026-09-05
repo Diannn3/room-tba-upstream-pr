@@ -103,6 +103,29 @@ describe("nearestEdgeSnap", () => {
     expect(snap.edgeIndex).toBe(0);
   });
 
+  test("ignores a closer disconnected edge in favor of the main weak component", () => {
+    const withIsland = buildTravelGraph({
+      meta: { coordScale: 1e6, nodeCount: 5, edgeCount: 3 },
+      nodes: [
+        [1, 14, 121],
+        [2, 14, 121.001],
+        [3, 14, 121.002],
+        [4, 14.01, 121],
+        [5, 14.01, 121.001],
+      ],
+      edges: [
+        [0, 1, 100, "footway", null, []],
+        [1, 2, 100, "footway", null, []],
+        [3, 4, 100, "footway", null, []],
+      ],
+    });
+
+    const snap = nearestEdgeSnap(withIsland, { lat: 14.01, lon: 121.0005 });
+    expect(snap.edgeIndex).not.toBe(2);
+    expect(snap.edgeIndex).toBeLessThan(2);
+    expect(snap.snapMeters).toBeGreaterThan(1000);
+  });
+
   test("fails when the graph has no edge geometry", () => {
     const noEdges = buildTravelGraph({
       meta: { coordScale: 1e6, nodeCount: 1, edgeCount: 0 },

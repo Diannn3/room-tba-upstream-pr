@@ -64,6 +64,46 @@ nearest-node endpoints that were already on the canonical main component. It
 also checks that known off-campus teaching sites still fail closed and that New
 Math → Physical Sciences joins connector and mapped geometry without a gap.
 
+### Endpoint source-coverage gate
+
+The routing endpoint fixture is **not** the runtime building source. The Map
+Tools picker uses the application's current building data, while
+`exports/deep-research/buildings.json` is a PostgreSQL research export dated
+2026-07-13. That export has 52 building rows. A later checked-in landmark-image
+manifest, generated from the public `/api/buildings`, contains 58 building
+identities, so the 52-row fixture must not be described as exhaustive.
+
+The currently exposed gap is:
+
+- 4Boys House
+- Old Agronomy Headhouse
+- Old Makiling School
+- Raymundo Gate
+- Student Union Building
+- UPLB Rural Economic Development and Renewable Energy Center (REDREC)
+
+Run the deterministic checked-in comparison while developing:
+
+```sh
+bun scripts/building-route-source-coverage.ts
+bun scripts/building-route-source-coverage.ts --json
+```
+
+The landmark-image manifest is only an **API-derived canary**, not routing
+truth. Before saying that every currently selectable building has been audited,
+compare against the deployment that supplies the real building picker and make
+the mismatch a hard failure:
+
+```sh
+bun scripts/building-route-source-coverage.ts \
+  --from-api https://www.uplb.tools \
+  --strict
+```
+
+If this fails, refresh or deliberately re-source the routing audit input using
+verified current building records. Never manufacture coordinates from the
+manifest, screenshots, names, or memory merely to make the counts match.
+
 ## Product boundaries
 
 This feature does **not** route individual rooms, infer indoor corridors or
@@ -88,7 +128,8 @@ bun test src/lib/travel-graph/edge-snap.test.ts \
   src/lib/travel-graph/building-route.test.ts \
   src/lib/travel-graph/building-route-structural.test.ts \
   src/lib/travel-graph/building-route-map.test.ts \
-  src/lib/travel-graph/building-route.baseline.test.ts
+  src/lib/travel-graph/building-route.baseline.test.ts \
+  scripts/lib/building-route-source-coverage.test.ts
 bunx vitest run \
   src/components/svelte/building-route/BuildingRoutePanel.component.test.ts \
   src/components/svelte/building-route/BuildingRouteMapOverlay.component.test.ts \

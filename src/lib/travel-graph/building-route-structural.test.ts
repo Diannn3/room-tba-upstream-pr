@@ -22,8 +22,8 @@ function simpleGraph() {
 }
 
 describe("building route structural fail-closed guards", () => {
-  test("rejects non-finite and negative edge distances", () => {
-    for (const meters of [Number.NaN, -1]) {
+  test("rejects non-finite, zero, and negative edge distances", () => {
+    for (const meters of [Number.NaN, 0, -1]) {
       const graph = buildTravelGraph({
         meta: { coordScale: 1e6, nodeCount: 2, edgeCount: 1 },
         nodes: [
@@ -41,6 +41,32 @@ describe("building route structural fail-closed guards", () => {
           maxSnapMeters: 10,
         }),
       ).toThrow(/invalid distance/i);
+    }
+  });
+
+  test("accepts canonical undirected self-loops with paired adjacency halves", () => {
+    const graph = buildTravelGraph({
+      meta: { coordScale: 1e6, nodeCount: 2, edgeCount: 2 },
+      nodes: [
+        [1, 14, 121],
+        [2, 14, 121.001],
+      ],
+      edges: [
+        [0, 0, 30, "footway", null, [100, 100]],
+        [0, 1, 100, "footway", null, []],
+      ],
+    });
+
+    const result = routeBuildingToBuilding({
+      graph,
+      origin: building(1, 121),
+      destination: building(2, 121.001),
+      maxSnapMeters: 10,
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.route.totalMeters).toBeCloseTo(100, 6);
     }
   });
 

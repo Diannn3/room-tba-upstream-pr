@@ -5,14 +5,15 @@
  * Deterministic canary (no network):
  *   bun scripts/building-route-source-coverage.ts
  *
- * Authority check against a deployment's current /api/buildings:
+ * Checked-in fixture freshness check against a deployment's /api/buildings:
  *   bun scripts/building-route-source-coverage.ts --from-api https://www.uplb.tools
  *   bun scripts/building-route-source-coverage.ts --from-api https://www.uplb.tools --strict
  *
- * `--strict` exits non-zero on any missing/extra/duplicate identity. The
- * checked-in landmark-image manifest is deliberately called a canary rather
- * than a source of truth: its generator reads /api/buildings, but an image
- * manifest could stop covering every building in the future.
+ * `--strict` exits non-zero on any missing/extra/duplicate identity. This means
+ * "the checked-in historical fixture is not current", not "a live API-backed
+ * endpoint audit cannot be complete". For current live audit evidence, run the
+ * endpoint/edge-snap audits themselves with `--from-api` and preserve their
+ * source count + fingerprints.
  */
 import auditBuildingsJson from "../exports/deep-research/buildings.json";
 import auditManifestJson from "../exports/deep-research/manifest.json";
@@ -73,19 +74,19 @@ if (hasFlag("--json")) {
   console.log(`audit export: ${auditExportedAt ?? "unknown"}`);
   console.log(
     `coverage: ${coverage.matchedCount}/${coverage.referenceUniqueCount} reference buildings matched; ` +
-      `${coverage.auditUniqueCount} unique audit buildings`,
+      `${coverage.auditUniqueCount} unique checked-in audit buildings`,
   );
 
   if (coverage.missingFromAudit.length > 0) {
-    console.log("\nMissing from routing audit:");
+    console.log("\nMissing from checked-in routing audit fixture:");
     for (const name of coverage.missingFromAudit) console.log(`  - ${name}`);
   }
   if (coverage.extraInAudit.length > 0) {
-    console.log("\nPresent only in routing audit:");
+    console.log("\nPresent only in checked-in routing audit fixture:");
     for (const name of coverage.extraInAudit) console.log(`  - ${name}`);
   }
   if (coverage.duplicateAuditNames.length > 0) {
-    console.log("\nDuplicate routing-audit identities:");
+    console.log("\nDuplicate checked-in routing-audit identities:");
     for (const name of coverage.duplicateAuditNames) console.log(`  - ${name}`);
   }
   if (coverage.duplicateReferenceNames.length > 0) {
@@ -94,10 +95,10 @@ if (hasFlag("--json")) {
       console.log(`  - ${name}`);
   }
   if (coverage.complete) {
-    console.log("\nIdentity coverage matches this reference source.");
+    console.log("\nChecked-in fixture identity coverage matches this reference source.");
   } else {
     console.log(
-      "\nCoverage mismatch: do not claim every selectable building is audited.",
+      "\nCoverage mismatch: do not claim the checked-in routing fixture covers every reference building.",
     );
   }
 }

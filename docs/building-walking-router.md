@@ -89,9 +89,9 @@ Tools picker uses the application's current building data, while
 `exports/deep-research/buildings.json` is a PostgreSQL research export dated
 2026-07-13. That export has 52 building rows. A later checked-in landmark-image
 manifest, generated from the public `/api/buildings`, contains 58 building
-identities, so the 52-row fixture must not be described as exhaustive.
+identities, so the 52-row fixture must not be described as current or exhaustive.
 
-The currently exposed gap is:
+The currently exposed historical-fixture gap is:
 
 - 4Boys House
 - Old Agronomy Headhouse
@@ -108,9 +108,8 @@ bun scripts/building-route-source-coverage.ts --json
 ```
 
 The landmark-image manifest is only an **API-derived canary**, not routing
-truth. Before saying that every currently selectable building has been audited,
-compare against the deployment that supplies the real building picker and make
-the mismatch a hard failure:
+truth. Use a live reference when deciding whether the checked-in fixture itself
+has caught up:
 
 ```sh
 bun scripts/building-route-source-coverage.ts \
@@ -118,9 +117,17 @@ bun scripts/building-route-source-coverage.ts \
   --strict
 ```
 
-If this fails, refresh or deliberately re-source the routing audit input using
-verified current building records. Never manufacture coordinates from the
-manifest, screenshots, names, or memory merely to make the counts match.
+A failure here means only that the **checked-in historical fixture** does not
+match current building identities. It does not invalidate a live audit that
+directly consumed all current API rows. To claim current selectable-building
+audit coverage, run the endpoint and edge-snap audits with `--from-api`, record
+the returned building count and input fingerprints, and make sure the live API
+payload itself passed the parser's non-empty, unique-id, and coordinate checks.
+
+If the project later wants deterministic checked-in coverage for all current
+buildings, refresh or deliberately re-source the routing audit input using
+verified current records. Never manufacture coordinates from the manifest,
+screenshots, names, or memory merely to make the counts match.
 
 ## Product boundaries
 

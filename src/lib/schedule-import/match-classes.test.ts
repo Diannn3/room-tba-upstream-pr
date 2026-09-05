@@ -29,6 +29,7 @@ describe("matchImportedScheduleRows", () => {
       121.077, 14.135,
     ]);
     expect(result.matchedClassId).toBe(1);
+    expect(result.roomId).toBe(10);
     expect(result.roomCode).toBe("ICS 314");
     expect(result.coords).toEqual([121.077, 14.135]);
     expect(result.unresolvedReason).toBeNull();
@@ -36,6 +37,7 @@ describe("matchImportedScheduleRows", () => {
 
   it("marks missing sections unresolved", () => {
     const [result] = matchImportedScheduleRows([row], [], () => null);
+    expect(result.roomId).toBeNull();
     expect(result.unresolvedReason).toContain("No matching section");
   });
 
@@ -45,15 +47,17 @@ describe("matchImportedScheduleRows", () => {
       [sampleClass],
       () => [121, 14],
     );
+    expect(result.roomId).toBeNull();
     expect(result.unresolvedReason).toContain("no fixed room");
   });
 
-  it("flags rooms without coordinates", () => {
+  it("flags rooms without coordinates but retains their room identity", () => {
     const [result] = matchImportedScheduleRows(
       [row],
       [sampleClass],
       () => null,
     );
+    expect(result.roomId).toBe(10);
     expect(result.unresolvedReason).toContain("no map coordinates");
   });
 });

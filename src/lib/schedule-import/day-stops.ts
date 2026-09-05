@@ -90,6 +90,7 @@ export function orderDayStops(
         section: match.row.section,
         type: match.row.type,
         scheduleSlot: slot,
+        roomId: match.roomId,
         roomCode: match.roomCode,
         coords: match.coords,
         startMinutes: minutes.startMinutes,

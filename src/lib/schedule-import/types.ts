@@ -22,6 +22,8 @@ export type ImportedScheduleRow = {
 export type ScheduleMatchResult = {
   row: ImportedScheduleRow;
   matchedClassId: number | null;
+  /** Institutional room identity retained for transfer planning. */
+  roomId: number | null;
   roomCode: string | null;
   coords: [number, number] | null;
   unresolvedReason: string | null;
@@ -32,6 +34,7 @@ export type ScheduleDayStop = {
   section: string;
   type: string;
   scheduleSlot: string;
+  roomId: number | null;
   roomCode: string | null;
   coords: [number, number] | null;
   startMinutes: number;

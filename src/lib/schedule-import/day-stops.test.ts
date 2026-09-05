@@ -64,6 +64,7 @@ describe("orderDayStops", () => {
       schedule: ["MW 08:00AM-09:00AM"],
     },
     matchedClassId: 1,
+    roomId: 10,
     roomCode: "ICS 314",
     coords: [121.077, 14.135],
     unresolvedReason: null,
@@ -79,6 +80,7 @@ describe("orderDayStops", () => {
           type: "LAB",
           schedule: ["M 01:00PM-04:00PM"],
         },
+        roomId: 20,
         roomCode: "ICS 316",
         coords: [121.078, 14.136],
       }),
@@ -95,7 +97,9 @@ describe("orderDayStops", () => {
     const stops = orderDayStops(matches, "M");
     expect(stops).toHaveLength(2);
     expect(stops[0].courseCode).toBe("CMSC 123");
+    expect(stops[0].roomId).toBe(10);
     expect(stops[1].courseCode).toBe("CMSC 170");
+    expect(stops[1].roomId).toBe(20);
     expect(stops[0].gapMinutesAfter).toBe(4 * 60);
   });
 

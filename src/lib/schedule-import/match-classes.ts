@@ -55,6 +55,7 @@ export function matchImportedScheduleRows(
       return {
         row,
         matchedClassId: null,
+        roomId: null,
         roomCode: null,
         coords: null,
         unresolvedReason:
@@ -69,6 +70,7 @@ export function matchImportedScheduleRows(
       return {
         row,
         matchedClassId: null,
+        roomId: null,
         roomCode: null,
         coords: null,
         unresolvedReason: "No matching section in Room TBA for this term.",
@@ -80,6 +82,7 @@ export function matchImportedScheduleRows(
       return {
         row,
         matchedClassId: matched.id,
+        roomId: matched.roomId,
         roomCode: null,
         coords: null,
         unresolvedReason: "Matched section has no room assigned.",
@@ -91,6 +94,7 @@ export function matchImportedScheduleRows(
       return {
         row,
         matchedClassId: matched.id,
+        roomId: matched.roomId,
         roomCode,
         coords: null,
         unresolvedReason: `Room ${roomCode} has no map coordinates yet.`,
@@ -100,6 +104,7 @@ export function matchImportedScheduleRows(
     return {
       row,
       matchedClassId: matched.id,
+      roomId: matched.roomId,
       roomCode,
       coords,
       unresolvedReason: null,

@@ -80,6 +80,33 @@ describe("planClassTransfers", () => {
     expect(roomResolutions).toBe(1);
   });
 
+  test("skips room and graph work when no adjacent transfer exists", async () => {
+    let graphLoads = 0;
+    let roomResolutions = 0;
+    const dependencies: ClassTransferPlanDependencies = {
+      loadGraph: async () => {
+        graphLoads += 1;
+        return graph;
+      },
+      resolveRooms: async () => {
+        roomResolutions += 1;
+        return roomResolution;
+      },
+    };
+
+    for (const noPair of [[], stops.slice(0, 1)]) {
+      const result = await planClassTransfers(
+        { stops: noPair, buildings },
+        dependencies,
+      );
+      expect(result.status).toBe("ready");
+      expect(result.evaluations).toEqual([]);
+      expect(result.roomSourceIssues.size).toBe(0);
+    }
+    expect(graphLoads).toBe(0);
+    expect(roomResolutions).toBe(0);
+  });
+
   test("fails closed when the vendored graph cannot load", async () => {
     const issues = new Map([[1, "not-found" as const]]);
     const dependencies: ClassTransferPlanDependencies = {

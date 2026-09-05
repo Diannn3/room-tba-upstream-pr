@@ -56,6 +56,16 @@ export async function planClassTransfers(
   { stops, buildings, bufferSeconds }: PlanClassTransfersInput,
   dependencies: ClassTransferPlanDependencies = defaultDependencies,
 ): Promise<ClassTransferPlanResult> {
+  // No adjacent pair means there is nothing to estimate. Avoid loading the
+  // graph or room cache merely to prove an empty result.
+  if (stops.length < 2) {
+    return {
+      status: "ready",
+      evaluations: [],
+      roomSourceIssues: new Map(),
+    };
+  }
+
   const roomResolution = await dependencies.resolveRooms(stops);
 
   let graph: TravelGraph;

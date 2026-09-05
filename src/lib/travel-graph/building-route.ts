@@ -280,6 +280,18 @@ function assertGraphAdjacency(graph: TravelGraph): void {
     );
   }
 
+  // Dijkstra treats edge distance as traversal cost. Zero-length or negative
+  // records would create a free graph transition, so reject them before route
+  // planning even if the shared graph engine was handed malformed input.
+  for (let edgeIndex = 0; edgeIndex < graph.edges.length; edgeIndex++) {
+    const edge = graph.edges[edgeIndex];
+    if (!edge || !Number.isFinite(edge[2]) || edge[2] <= 0) {
+      throw new Error(
+        `building route: graph edge ${edgeIndex} has invalid distance`,
+      );
+    }
+  }
+
   const forwardSeen = new Uint8Array(graph.edges.length);
   const reverseSeen = new Uint8Array(graph.edges.length);
   for (let nodeIndex = 0; nodeIndex < graph.adjacency.length; nodeIndex++) {
@@ -298,6 +310,25 @@ function assertGraphAdjacency(graph: TravelGraph): void {
         );
       }
       const [u, v, , , , , oneway] = edge;
+
+      // An undirected self-loop is represented by two identical adjacency
+      // halves because u === v. Count the first as the stored direction and
+      // the second as the reverse direction instead of classifying both as
+      // forward. One-way self-loops legitimately have only the first half.
+      if (u === v && nodeIndex === u && to === u) {
+        if (forwardSeen[edgeIndex] !== 1) {
+          forwardSeen[edgeIndex] = 1;
+          continue;
+        }
+        if (!oneway && reverseSeen[edgeIndex] !== 1) {
+          reverseSeen[edgeIndex] = 1;
+          continue;
+        }
+        throw new Error(
+          `building route: graph adjacency is inconsistent for edge ${edgeIndex}`,
+        );
+      }
+
       if (nodeIndex === u && to === v) {
         forwardSeen[edgeIndex] = 1;
         continue;
@@ -471,7 +502,10 @@ function routeBetweenEdgeSnaps(
           destinationLeg.coordinates,
         ),
       };
-      if (!best || candidate.meters < best.meters - EDGE_POSITION_EPSILON_METERS) {
+      if (
+        !best ||
+        candidate.meters < best.meters - EDGE_POSITION_EPSILON_METERS
+      ) {
         best = candidate;
       }
     }

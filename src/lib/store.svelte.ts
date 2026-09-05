@@ -4,3 +4,7 @@ export {
   BuildingRouteStore,
   buildingRouteStore,
 } from "./stores/building-route-store.svelte.js";
+export {
+  ClassTransferStore,
+  classTransferStore,
+} from "./stores/class-transfer-store.svelte.js";

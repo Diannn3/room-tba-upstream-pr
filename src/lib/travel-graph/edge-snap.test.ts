@@ -126,6 +126,22 @@ describe("nearestEdgeSnap", () => {
     expect(snap.snapMeters).toBeGreaterThan(1000);
   });
 
+  test("rejects non-positive and non-finite graph costs before correlation", () => {
+    for (const meters of [Number.NaN, 0, -1]) {
+      const malformed = buildTravelGraph({
+        meta: { coordScale: 1e6, nodeCount: 2, edgeCount: 1 },
+        nodes: [
+          [1, 14, 121],
+          [2, 14, 121.001],
+        ],
+        edges: [[0, 1, meters, "footway", null, []]],
+      });
+      expect(() => nearestEdgeSnap(malformed, { lat: 14, lon: 121 })).toThrow(
+        /invalid distance/i,
+      );
+    }
+  });
+
   test("fails when the graph has no edge geometry", () => {
     const noEdges = buildTravelGraph({
       meta: { coordScale: 1e6, nodeCount: 1, edgeCount: 0 },

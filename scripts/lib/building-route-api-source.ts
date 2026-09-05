@@ -18,9 +18,20 @@ function finiteNumber(value: unknown, label: string): number {
   return parsed;
 }
 
-function nullableCoordinate(value: unknown, label: string): number | null {
+function nullableCoordinate(
+  value: unknown,
+  label: string,
+  min: number,
+  max: number,
+): number | null {
   if (value === null || value === undefined) return null;
-  return finiteNumber(value, label);
+  const parsed = finiteNumber(value, label);
+  if (parsed < min || parsed > max) {
+    throw new Error(
+      `building route API source: ${label} is outside ${min}..${max}`,
+    );
+  }
+  return parsed;
 }
 
 export function buildingApiUrl(base: string): string {
@@ -57,8 +68,8 @@ export function parseBuildingRouteApiRows(payload: unknown): BuildingRouteApiRow
     return {
       id,
       buildingName: row.buildingName,
-      lat: nullableCoordinate(row.lat, `row ${index} lat`),
-      lon: nullableCoordinate(row.lon, `row ${index} lon`),
+      lat: nullableCoordinate(row.lat, `row ${index} lat`, -90, 90),
+      lon: nullableCoordinate(row.lon, `row ${index} lon`, -180, 180),
     };
   });
 }

@@ -57,4 +57,17 @@ describe("building route API source", () => {
       ]),
     ).toThrow(/lat is not finite/i);
   });
+
+  test("rejects finite coordinates outside geographic bounds", () => {
+    expect(() =>
+      parseBuildingRouteApiRows([
+        { id: 1, buildingName: "Bad Latitude", lat: 90.1, lon: 121 },
+      ]),
+    ).toThrow(/lat is outside -90\.\.90/i);
+    expect(() =>
+      parseBuildingRouteApiRows([
+        { id: 2, buildingName: "Bad Longitude", lat: 14, lon: -180.1 },
+      ]),
+    ).toThrow(/lon is outside -180\.\.180/i);
+  });
 });

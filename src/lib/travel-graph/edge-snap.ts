@@ -186,6 +186,11 @@ function edgeGeometryIndex(graph: TravelGraph): EdgeGeometryIndexEntry[] {
       );
       cumulativeMeters[i] = geometryMeters;
     }
+    if (!Number.isFinite(geometryMeters) || geometryMeters <= 0) {
+      throw new Error(
+        `building route: graph edge ${edgeIndex} has degenerate geometry`,
+      );
+    }
     return { coordinates, cumulativeMeters, geometryMeters };
   });
 

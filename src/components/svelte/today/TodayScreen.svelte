@@ -1,14 +1,18 @@
 <script lang="ts">
   import ChevronLeft from "@lucide/svelte/icons/chevron-left";
+  import Footprints from "@lucide/svelte/icons/footprints";
   import MapPin from "@lucide/svelte/icons/map-pin";
   import Route from "@lucide/svelte/icons/route";
   import { fly } from "svelte/transition";
   import { MediaQuery } from "svelte/reactivity";
   import { formatDistance, formatDuration } from "@lib/campus-route";
+  import { getAppData } from "@lib/context";
   import { trapFocus } from "@lib/focus-trap";
   import { fullScreenReveal } from "@lib/motion";
+  import { presentClassTransfer } from "@lib/schedule-import/class-transfer-copy";
   import { WEEKDAYS } from "@lib/schedule-import/types";
   import {
+    classTransferStore,
     locationStore,
     plannerStore,
     queryStore,
@@ -21,6 +25,7 @@
   import { formatTermDateRange, isDateWithinTerm } from "@lib/term-calendar";
 
   const reducedMotion = new MediaQuery("(prefers-reduced-motion: reduce)");
+  const appData = getAppData();
 
   let screenEl = $state<HTMLDivElement | null>(null);
 
@@ -76,6 +81,77 @@
     }
   }
 
+  // Transfer estimates deliberately use a separate canonical walk-graph path.
+  // The signature hides stale results as soon as the saved plan changes without
+  // forcing Today to perform matching/network work merely by opening the screen.
+  const transferPlanSignature = $derived(
+    [
+      String(termStore.activeTermId ?? "none"),
+      ...sections.map((section) =>
+        [
+          section.courseCode,
+          section.section,
+          section.type,
+          section.schedule.join(","),
+          section.roomCode ?? "TBA",
+          section.stale ? "stale" : "active",
+        ].join("|"),
+      ),
+    ].join("||"),
+  );
+  const appLoaded = $derived(appData().loaded);
+  const canCheckTransfers = $derived(
+    appLoaded &&
+      todayWeekday !== null &&
+      !offTermNote &&
+      (today?.entries.length ?? 0) >= 2,
+  );
+  const transferHint = $derived.by(() => {
+    if (!hasPlan) return "Add at least two classes in the Planner first.";
+    if (offTermNote) return "Transfer checks are available while the term is in session.";
+    if (todayWeekday === null) return "No class transfers on Sundays.";
+    if ((today?.entries.length ?? 0) < 2) return "At least two classes are needed for a transfer check.";
+    if (!appLoaded) return "Loading campus data…";
+    return null;
+  });
+  let checkingTransfers = $state(false);
+  let checkedTransferSignature = $state<string | null>(null);
+  const transferResultCurrent = $derived(
+    checkedTransferSignature === transferPlanSignature &&
+      classTransferStore.weekday === todayWeekday &&
+      classTransferStore.phase !== "idle",
+  );
+
+  async function checkTransfers() {
+    if (checkingTransfers || !canCheckTransfers || todayWeekday === null) return;
+    const requestedWeekday = todayWeekday;
+    const requestedSignature = transferPlanSignature;
+    checkingTransfers = true;
+    checkedTransferSignature = null;
+    try {
+      if (!(await scheduleRouteStore.importFromPlanner())) {
+        classTransferStore.clear();
+        return;
+      }
+      const currentAppData = appData();
+      if (!currentAppData.loaded) {
+        classTransferStore.clear();
+        return;
+      }
+      await classTransferStore.refresh({
+        matches: scheduleRouteStore.matches,
+        weekday: requestedWeekday,
+        buildings: currentAppData.buildings,
+      });
+      // A plan edit while the async check was running invalidates the result.
+      if (requestedSignature === transferPlanSignature) {
+        checkedTransferSignature = requestedSignature;
+      }
+    } finally {
+      checkingTransfers = false;
+    }
+  }
+
   // /today?route=1 deep link (flag set by Entry.svelte before this mounts).
   // Consumed only once terms have loaded: the plan is keyed by the active
   // term, so at mount canRouteToday is still false and the flag would drop.
@@ -128,25 +204,80 @@
     <p class="today-note" role="note">{offTermNote}</p>
   {/if}
 
-  <div class="today-route">
-    <button
-      type="button"
-      class="today-route__button"
-      disabled={!canRouteToday || routing}
-      onclick={routeMyDay}
-    >
-      <Route size={16} aria-hidden="true" />
-      {routing ? "Routing…" : "Route my day"}
-    </button>
-    {#if routeHint}
-      <span class="today-route__hint">{routeHint}</span>
-    {:else if routedToday && scheduleRouteStore.routeTotals}
-      <span class="today-route__totals">
-        {formatDuration(scheduleRouteStore.routeTotals.seconds)} walk ·
-        {formatDistance(scheduleRouteStore.routeTotals.meters)}
-      </span>
-    {/if}
+  <div class="today-actions">
+    <div class="today-route">
+      <button
+        type="button"
+        class="today-route__button"
+        disabled={!canRouteToday || routing}
+        onclick={routeMyDay}
+      >
+        <Route size={16} aria-hidden="true" />
+        {routing ? "Routing…" : "Route my day"}
+      </button>
+      {#if routeHint}
+        <span class="today-route__hint">{routeHint}</span>
+      {:else if routedToday && scheduleRouteStore.routeTotals}
+        <span class="today-route__totals">
+          {formatDuration(scheduleRouteStore.routeTotals.seconds)} walk ·
+          {formatDistance(scheduleRouteStore.routeTotals.meters)}
+        </span>
+      {/if}
+    </div>
+
+    <div class="today-transfer-action">
+      <button
+        type="button"
+        class="today-transfer-action__button"
+        disabled={!canCheckTransfers || checkingTransfers}
+        onclick={checkTransfers}
+      >
+        <Footprints size={16} aria-hidden="true" />
+        {checkingTransfers ? "Checking…" : "Check transfers"}
+      </button>
+      {#if transferHint}
+        <span class="today-transfer-action__hint">{transferHint}</span>
+      {:else}
+        <span class="today-transfer-action__hint">
+          Outdoor estimates use mapped campus walkways; indoor routes are not modeled.
+        </span>
+      {/if}
+    </div>
   </div>
+
+  {#if transferResultCurrent}
+    <section class="today-transfers" aria-labelledby="today-transfers-title" aria-live="polite">
+      <h2 id="today-transfers-title">Today’s transfers</h2>
+      {#if classTransferStore.phase === "unavailable"}
+        <p class="today-transfers__status">
+          Walking graph unavailable. No fallback transfer estimate was used.
+        </p>
+      {:else if classTransferStore.phase === "error"}
+        <p class="today-transfers__status">
+          Transfer estimates are unavailable right now. No fallback estimate was used.
+        </p>
+      {:else if classTransferStore.phase === "ready" && classTransferStore.evaluations.length === 0}
+        <p class="today-transfers__status">No between-class transfer to check today.</p>
+      {:else if classTransferStore.phase === "ready"}
+        <ul class="today-transfer-list">
+          {#each classTransferStore.evaluations as evaluation (`${evaluation.fromStopIndex}-${evaluation.toStopIndex}`)}
+            {@const from = classTransferStore.stops[evaluation.fromStopIndex]}
+            {@const to = classTransferStore.stops[evaluation.toStopIndex]}
+            {#if from && to}
+              {@const presentation = presentClassTransfer(evaluation, from, to)}
+              <li class="today-transfer-card" data-tone={presentation.tone}>
+                <span class="today-transfer-card__courses">
+                  {from.courseCode} → {to.courseCode}
+                </span>
+                <strong class="today-transfer-card__headline">{presentation.headline}</strong>
+                <span class="today-transfer-card__detail">{presentation.detail}</span>
+              </li>
+            {/if}
+          {/each}
+        </ul>
+      {/if}
+    </section>
+  {/if}
 
   <div class="today-body">
     {#if !hasPlan}
@@ -268,15 +399,23 @@
     color: hsl(0, 0%, 40%);
   }
 
-  .today-route {
+  .today-actions {
     display: flex;
-    align-items: center;
-    flex-wrap: wrap;
+    flex-direction: column;
     gap: 0.5rem;
     max-width: 52rem;
   }
 
-  .today-route__button {
+  .today-route,
+  .today-transfer-action {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .today-route__button,
+  .today-transfer-action__button {
     all: unset;
     box-sizing: border-box;
     display: inline-flex;
@@ -285,29 +424,44 @@
     padding: 0.4375rem 0.875rem;
     border: 1px solid hsl(5, 53%, 32%);
     border-radius: 999px;
-    background: hsl(5, 53%, 32%);
-    color: #fff;
     font-size: 0.8125rem;
     font-weight: 700;
     cursor: pointer;
+  }
+
+  .today-route__button {
+    background: hsl(5, 53%, 32%);
+    color: #fff;
+  }
+
+  .today-transfer-action__button {
+    background: white;
+    color: hsl(5, 53%, 32%);
   }
 
   .today-route__button:hover:not(:disabled) {
     background: hsl(5, 53%, 38%);
   }
 
-  .today-route__button:focus-visible {
+  .today-transfer-action__button:hover:not(:disabled) {
+    background: hsl(5, 53%, 96%);
+  }
+
+  .today-route__button:focus-visible,
+  .today-transfer-action__button:focus-visible {
     outline: 2px solid hsl(5, 53%, 32%);
     outline-offset: 2px;
   }
 
-  .today-route__button:disabled {
+  .today-route__button:disabled,
+  .today-transfer-action__button:disabled {
     opacity: 0.55;
     cursor: not-allowed;
   }
 
   .today-route__hint,
-  .today-route__totals {
+  .today-route__totals,
+  .today-transfer-action__hint {
     font-size: 0.8125rem;
     color: hsl(0, 0%, 40%);
   }
@@ -315,6 +469,79 @@
   .today-route__totals {
     font-weight: 600;
     color: hsl(5, 53%, 22%);
+  }
+
+  .today-transfers {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+    max-width: 52rem;
+    padding: 0.625rem;
+    border: 1px solid hsl(0, 0%, 88%);
+    border-radius: 0.75rem;
+    background: white;
+  }
+
+  .today-transfers h2 {
+    margin: 0;
+    font-size: 0.875rem;
+    font-weight: 800;
+    color: hsl(0, 0%, 18%);
+  }
+
+  .today-transfers__status {
+    margin: 0;
+    font-size: 0.8125rem;
+    color: hsl(0, 0%, 42%);
+  }
+
+  .today-transfer-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .today-transfer-card {
+    display: grid;
+    gap: 0.125rem;
+    padding: 0.5rem 0.625rem;
+    border-left: 3px solid hsl(0, 0%, 70%);
+    border-radius: 0.375rem;
+    background: hsl(0, 0%, 98%);
+  }
+
+  .today-transfer-card[data-tone="good"] {
+    border-left-color: hsl(142, 45%, 38%);
+  }
+
+  .today-transfer-card[data-tone="caution"] {
+    border-left-color: hsl(35, 75%, 45%);
+  }
+
+  .today-transfer-card[data-tone="risk"] {
+    border-left-color: hsl(5, 60%, 45%);
+  }
+
+  .today-transfer-card__courses {
+    font-size: 0.6875rem;
+    font-weight: 700;
+    color: hsl(0, 0%, 45%);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+
+  .today-transfer-card__headline {
+    font-size: 0.8125rem;
+    color: hsl(0, 0%, 18%);
+  }
+
+  .today-transfer-card__detail {
+    font-size: 0.75rem;
+    line-height: 1.35;
+    color: hsl(0, 0%, 40%);
   }
 
   .today-body {

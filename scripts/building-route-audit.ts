@@ -1,10 +1,15 @@
 /**
  * Audit Room TBA building pins against the vendored walking graph.
  *
- * This is the Pass 0 gate for building-to-building walking directions. It is
- * offline and deterministic by default. Pass `--from-api <deployment>` to
+ * This is the Pass 0 baseline gate for building-to-building walking directions.
+ * It is offline and deterministic by default. Pass `--from-api <deployment>` to
  * audit the deployment's current selectable building rows without mutating the
  * historical checked-in research export.
+ *
+ * NOTE: this audit intentionally preserves the legacy nearest-junction-node
+ * baseline used to establish Room TBA's endpoint ceiling. The runtime building
+ * router now correlates to eligible walk-edge geometry; use
+ * `building-edge-snap-audit.ts` for the current correlation comparison.
  *
  * Usage:
  *   bun scripts/building-route-audit.ts
@@ -26,6 +31,10 @@ import {
   buildingApiUrl,
   fetchBuildingRouteApiRows,
 } from "./lib/building-route-api-source";
+import {
+  buildingRouteSourceSha256,
+  sha256Text,
+} from "./lib/building-route-audit-provenance";
 
 const BUILDINGS_PATH = "exports/deep-research/buildings.json";
 const GRAPH_PATH = "src/generated/walk-graph.json";
@@ -57,12 +66,20 @@ function printStats(label: string, stats: DistributionStats | null): void {
 
 function printReport(
   report: BuildingEndpointAuditReport,
-  buildingSource: string,
+  input: {
+    buildingSource: string;
+    buildingSourceSha256: string;
+    graphPath: string;
+    graphSha256: string;
+  },
 ): void {
-  console.log("Room TBA building routing endpoint audit");
-  console.log(`building source: ${buildingSource}`);
+  console.log("Room TBA building routing endpoint audit (legacy node baseline)");
+  console.log(`building source: ${input.buildingSource}`);
+  console.log(`building source sha256: ${input.buildingSourceSha256}`);
+  console.log(`graph: ${input.graphPath}`);
+  console.log(`graph sha256: ${input.graphSha256}`);
   console.log(
-    `graph: ${report.graph.nodeCount} nodes, ${report.graph.edgeCount} edges, ` +
+    `graph shape: ${report.graph.nodeCount} nodes, ${report.graph.edgeCount} edges, ` +
       `${report.graph.componentCount} components; main component ${report.graph.mainComponentSize} nodes`,
   );
   if (report.graph.source) console.log(`graph source: ${report.graph.source}`);
@@ -105,20 +122,25 @@ function printReport(
   }
 }
 
-async function loadJson<T>(path: string): Promise<T> {
-  return JSON.parse(await readFile(path, "utf8")) as T;
-}
-
 const apiBase = argValue("--from-api");
 const buildingSource = apiBase
   ? `live API (${buildingApiUrl(apiBase)})`
   : BUILDINGS_PATH;
-const [buildings, graph] = await Promise.all([
+const [buildings, graphText] = await Promise.all([
   apiBase
     ? fetchBuildingRouteApiRows(apiBase)
-    : loadJson<AuditBuilding[]>(BUILDINGS_PATH),
-  loadJson<AuditWalkGraph>(GRAPH_PATH),
+    : readFile(BUILDINGS_PATH, "utf8").then(
+        (text) => JSON.parse(text) as AuditBuilding[],
+      ),
+  readFile(GRAPH_PATH, "utf8"),
 ]);
+const graph = JSON.parse(graphText) as AuditWalkGraph;
+const input = {
+  buildingSource,
+  buildingSourceSha256: buildingRouteSourceSha256(buildings),
+  graphPath: GRAPH_PATH,
+  graphSha256: sha256Text(graphText),
+};
 
 const report = auditBuildingEndpoints(buildings, graph, {
   // Reuse Room TBA's existing endpoint honesty ceiling. The audit derives a
@@ -128,9 +150,9 @@ const report = auditBuildingEndpoints(buildings, graph, {
 });
 
 if (hasFlag("--json")) {
-  console.log(JSON.stringify({ input: { buildingSource }, ...report }, null, 2));
+  console.log(JSON.stringify({ input, ...report }, null, 2));
 } else {
-  printReport(report, buildingSource);
+  printReport(report, input);
 }
 
 if (

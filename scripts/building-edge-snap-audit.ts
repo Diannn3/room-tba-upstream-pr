@@ -1,5 +1,6 @@
 /**
- * Compare the legacy nearest-node building connector with edge correlation.
+ * Compare the legacy nearest-node building connector with current edge
+ * correlation.
  *
  * Uses the historical checked-in building fixture by default. Pass
  * `--from-api <deployment>` to compare current selectable building records
@@ -11,9 +12,8 @@
  *   bun scripts/building-edge-snap-audit.ts --from-api https://www.uplb.tools
  */
 
+import { readFile } from "node:fs/promises";
 import { ENDPOINT_SNAP_TOLERANCE_METERS } from "../src/constants/travel-modes";
-import buildingsJson from "../exports/deep-research/buildings.json";
-import walkGraphJson from "../src/generated/walk-graph.json";
 import { distanceMeters } from "../src/lib/campus-route";
 import {
   buildTravelGraph,
@@ -30,6 +30,13 @@ import {
   buildingApiUrl,
   fetchBuildingRouteApiRows,
 } from "./lib/building-route-api-source";
+import {
+  buildingRouteSourceSha256,
+  sha256Text,
+} from "./lib/building-route-audit-provenance";
+
+const BUILDINGS_PATH = "exports/deep-research/buildings.json";
+const GRAPH_PATH = "src/generated/walk-graph.json";
 
 function argValue(flag: string): string | undefined {
   const index = process.argv.indexOf(flag);
@@ -37,13 +44,25 @@ function argValue(flag: string): string | undefined {
 }
 
 const apiBase = argValue("--from-api");
-const buildings = apiBase
-  ? await fetchBuildingRouteApiRows(apiBase)
-  : (buildingsJson as BuildingRouteEndpoint[]);
+const [buildings, graphText] = await Promise.all([
+  apiBase
+    ? fetchBuildingRouteApiRows(apiBase)
+    : readFile(BUILDINGS_PATH, "utf8").then(
+        (text) => JSON.parse(text) as BuildingRouteEndpoint[],
+      ),
+  readFile(GRAPH_PATH, "utf8"),
+]);
 const buildingSource = apiBase
   ? `live API (${buildingApiUrl(apiBase)})`
-  : "exports/deep-research/buildings.json";
-const graph = buildTravelGraph(walkGraphJson as unknown as WalkGraphData);
+  : BUILDINGS_PATH;
+const walkGraphJson = JSON.parse(graphText) as WalkGraphData;
+const graph = buildTravelGraph(walkGraphJson);
+const input = {
+  buildingSource,
+  buildingSourceSha256: buildingRouteSourceSha256(buildings),
+  graphPath: GRAPH_PATH,
+  graphSha256: sha256Text(graphText),
+};
 
 function percentile(values: number[], p: number): number {
   if (values.length === 0) return Number.NaN;
@@ -115,7 +134,7 @@ const nodeDistances = rows.map((row) => row.nodeSnapMeters);
 const edgeDistances = rows.map((row) => row.edgeSnapMeters);
 const improvements = rows.map((row) => row.improvementMeters);
 const report = {
-  input: { buildingSource },
+  input,
   policy: {
     hardSnapLimitMeters: ENDPOINT_SNAP_TOLERANCE_METERS,
     connectivity: "largest-weak-component",
@@ -123,6 +142,7 @@ const report = {
   summary: {
     buildingCount: buildings.length,
     comparableCount: rows.length,
+    skippedNullCoordinateCount: buildings.length - rows.length,
     strictlyImprovedCount: rows.filter((row) => row.improvementMeters > 0.5)
       .length,
     supportChangedCount: rows.filter((row) => row.supportChanged).length,
@@ -144,19 +164,27 @@ if (process.argv.includes("--json")) {
 } else {
   const fmt = (value: number) => `${value.toFixed(1)} m`;
   console.log("Room TBA building connector edge-snap audit");
-  console.log(`building source: ${buildingSource}`);
+  console.log(`building source: ${input.buildingSource}`);
+  console.log(`building source sha256: ${input.buildingSourceSha256}`);
+  console.log(`graph: ${input.graphPath}`);
+  console.log(`graph sha256: ${input.graphSha256}`);
   console.log(
     `buildings: ${report.summary.buildingCount}; comparable=${report.summary.comparableCount}; ` +
+      `null coordinates=${report.summary.skippedNullCoordinateCount}; ` +
       `strictly improved=${report.summary.strictlyImprovedCount}; support changes=${report.summary.supportChangedCount}`,
   );
-  console.log(
-    `nearest node: median=${fmt(report.nodeSnapDistribution.median)} p90=${fmt(report.nodeSnapDistribution.p90)} ` +
-      `p95=${fmt(report.nodeSnapDistribution.p95)} max=${fmt(report.nodeSnapDistribution.max)}`,
-  );
-  console.log(
-    `nearest edge: median=${fmt(report.edgeSnapDistribution.median)} p90=${fmt(report.edgeSnapDistribution.p90)} ` +
-      `p95=${fmt(report.edgeSnapDistribution.p95)} max=${fmt(report.edgeSnapDistribution.max)}`,
-  );
+  if (rows.length > 0) {
+    console.log(
+      `nearest node: median=${fmt(report.nodeSnapDistribution.median)} p90=${fmt(report.nodeSnapDistribution.p90)} ` +
+        `p95=${fmt(report.nodeSnapDistribution.p95)} max=${fmt(report.nodeSnapDistribution.max)}`,
+    );
+    console.log(
+      `nearest edge: median=${fmt(report.edgeSnapDistribution.median)} p90=${fmt(report.edgeSnapDistribution.p90)} ` +
+        `p95=${fmt(report.edgeSnapDistribution.p95)} max=${fmt(report.edgeSnapDistribution.max)}`,
+    );
+  } else {
+    console.log("no comparable building coordinates");
+  }
   console.log("\nLargest connector improvements:");
   for (const row of report.rows.slice(0, 12)) {
     console.log(

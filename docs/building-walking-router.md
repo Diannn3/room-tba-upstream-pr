@@ -59,6 +59,11 @@ bun scripts/building-edge-snap-audit.ts
 bun scripts/building-edge-snap-audit.ts --json
 ```
 
+`building-route-audit.ts` is deliberately the legacy nearest-node baseline used
+to establish the endpoint policy; it is not a description of current runtime
+correlation. `building-edge-snap-audit.ts` compares that baseline with the
+current edge-based virtual endpoint behavior.
+
 To evaluate the current selectable building records instead of the historical
 fixture, point both audits at the public deployment:
 
@@ -66,6 +71,11 @@ fixture, point both audits at the public deployment:
 bun scripts/building-route-audit.ts --from-api https://www.uplb.tools
 bun scripts/building-edge-snap-audit.ts --from-api https://www.uplb.tools
 ```
+
+Both audit outputs include SHA-256 fingerprints for the exact walk-graph bytes
+and the normalized building records they consumed. Preserve those hashes with
+any reported audit statistics so a later graph or building-pin change cannot be
+mistaken for the same evidence run.
 
 The real-campus baseline asserts the monotonic connector rule only for legacy
 nearest-node endpoints that were already on the canonical main component. It
@@ -132,13 +142,7 @@ approximation.
 Feature-focused checks:
 
 ```sh
-bun test src/lib/travel-graph/edge-snap.test.ts \
-  src/lib/travel-graph/building-route.test.ts \
-  src/lib/travel-graph/building-route-structural.test.ts \
-  src/lib/travel-graph/building-route-map.test.ts \
-  src/lib/travel-graph/building-route.baseline.test.ts \
-  scripts/lib/building-route-api-source.test.ts \
-  scripts/lib/building-route-source-coverage.test.ts
+bun run test:routing
 bunx vitest run \
   src/components/svelte/building-route/BuildingRoutePanel.component.test.ts \
   src/components/svelte/building-route/BuildingRouteMapOverlay.component.test.ts \

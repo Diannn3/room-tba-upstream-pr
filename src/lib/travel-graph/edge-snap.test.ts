@@ -142,6 +142,20 @@ describe("nearestEdgeSnap", () => {
     }
   });
 
+  test("rejects positive-cost edges with zero decoded geometric length", () => {
+    const malformed = buildTravelGraph({
+      meta: { coordScale: 1e6, nodeCount: 2, edgeCount: 1 },
+      nodes: [
+        [1, 14, 121],
+        [2, 14, 121],
+      ],
+      edges: [[0, 1, 100, "footway", null, []]],
+    });
+    expect(() => nearestEdgeSnap(malformed, { lat: 14, lon: 121 })).toThrow(
+      /degenerate geometry/i,
+    );
+  });
+
   test("fails when the graph has no edge geometry", () => {
     const noEdges = buildTravelGraph({
       meta: { coordScale: 1e6, nodeCount: 1, edgeCount: 0 },

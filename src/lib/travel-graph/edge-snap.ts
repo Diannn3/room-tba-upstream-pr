@@ -90,7 +90,7 @@ function assertEdgeSnapGraph(graph: TravelGraph): void {
     ) {
       throw new Error("building route: graph contains an out-of-range edge");
     }
-    if (!Number.isFinite(meters) || meters < 0) {
+    if (!Number.isFinite(meters) || meters <= 0) {
       throw new Error(
         `building route: graph edge ${edgeIndex} has invalid distance`,
       );

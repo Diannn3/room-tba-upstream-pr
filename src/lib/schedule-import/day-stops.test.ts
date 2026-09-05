@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
   formatMinutes,
   orderDayStops,
+  orderDayTransferStops,
   parseSlotMinutes,
   scheduleSlotOnWeekday,
   tokenizeScheduleDays,
@@ -15,7 +16,6 @@ describe("tokenizeScheduleDays", () => {
   });
 
   it("handles uppercase production tokens (TH not Th)", () => {
-    // Production/DB data stores days uppercase; Thursday must not collapse to T.
     expect(tokenizeScheduleDays("TTH")).toEqual(["T", "Th"]);
     expect(tokenizeScheduleDays("MTHF")).toEqual(["M", "Th", "F"]);
     expect(tokenizeScheduleDays("MTWTHFS")).toEqual([
@@ -53,7 +53,7 @@ describe("parseSlotMinutes", () => {
   });
 });
 
-describe("orderDayStops", () => {
+describe("day stop ordering", () => {
   const baseMatch = (
     overrides: Partial<ScheduleMatchResult>,
   ): ScheduleMatchResult => ({
@@ -71,7 +71,7 @@ describe("orderDayStops", () => {
     ...overrides,
   });
 
-  it("orders stops by start time and computes gaps", () => {
+  it("orders routable stops by start time and computes gaps", () => {
     const matches: ScheduleMatchResult[] = [
       baseMatch({
         row: {
@@ -103,7 +103,7 @@ describe("orderDayStops", () => {
     expect(stops[0].gapMinutesAfter).toBe(4 * 60);
   });
 
-  it("skips unresolved rows", () => {
+  it("keeps the existing map-route behavior of skipping unresolved rows", () => {
     const stops = orderDayStops(
       [
         baseMatch({
@@ -114,6 +114,60 @@ describe("orderDayStops", () => {
       "M",
     );
     expect(stops).toHaveLength(0);
+  });
+
+  it("retains unresolved classes for transfer adjacency", () => {
+    const matches: ScheduleMatchResult[] = [
+      baseMatch({
+        row: {
+          courseCode: "FIRST 1",
+          section: "A",
+          type: "LEC",
+          schedule: ["M 08:00AM-09:00AM"],
+        },
+      }),
+      baseMatch({
+        row: {
+          courseCode: "UNKNOWN 1",
+          section: "B",
+          type: "LEC",
+          schedule: ["M 09:10AM-10:00AM"],
+        },
+        matchedClassId: 2,
+        roomId: null,
+        roomCode: null,
+        coords: null,
+        unresolvedReason: "Matched section has no room assigned.",
+      }),
+      baseMatch({
+        row: {
+          courseCode: "LAST 1",
+          section: "C",
+          type: "LEC",
+          schedule: ["M 10:10AM-11:00AM"],
+        },
+        matchedClassId: 3,
+        roomId: 30,
+        roomCode: "ICS 316",
+        coords: [121.078, 14.136],
+      }),
+    ];
+
+    const mapStops = orderDayStops(matches, "M");
+    expect(mapStops.map((stop) => stop.courseCode)).toEqual([
+      "FIRST 1",
+      "LAST 1",
+    ]);
+
+    const transferStops = orderDayTransferStops(matches, "M");
+    expect(transferStops.map((stop) => stop.courseCode)).toEqual([
+      "FIRST 1",
+      "UNKNOWN 1",
+      "LAST 1",
+    ]);
+    expect(transferStops[1].roomId).toBeNull();
+    expect(transferStops[0].gapMinutesAfter).toBe(10);
+    expect(transferStops[1].gapMinutesAfter).toBe(10);
   });
 });
 

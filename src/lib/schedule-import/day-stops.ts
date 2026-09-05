@@ -70,15 +70,23 @@ export function scheduleSlotOnWeekday(
   return tokenizeScheduleDays(parsed.days).includes(weekday);
 }
 
-/** Build time-ordered routable stops for a weekday. Skips unresolved rows. */
-export function orderDayStops(
+function buildOrderedDayStops(
   matches: ScheduleMatchResult[],
   weekday: Weekday,
+  requireRoutableCoordinates: boolean,
 ): ScheduleDayStop[] {
   const stops: ScheduleDayStop[] = [];
 
   for (const match of matches) {
-    if (match.unresolvedReason || !match.coords) continue;
+    // The map route needs concrete coordinates and therefore skips unresolved
+    // classes. Transfer planning must keep them so an unknown venue remains an
+    // explicit unknown adjacent transfer instead of silently disappearing.
+    if (
+      requireRoutableCoordinates &&
+      (match.unresolvedReason !== null || !match.coords)
+    ) {
+      continue;
+    }
 
     for (const slot of match.row.schedule) {
       if (!scheduleSlotOnWeekday(slot, weekday)) continue;
@@ -113,6 +121,28 @@ export function orderDayStops(
   }
 
   return stops;
+}
+
+/** Build time-ordered map-route stops for a weekday. Skips unresolved rows. */
+export function orderDayStops(
+  matches: ScheduleMatchResult[],
+  weekday: Weekday,
+): ScheduleDayStop[] {
+  return buildOrderedDayStops(matches, weekday, true);
+}
+
+/**
+ * Build chronological class stops for transfer evaluation.
+ *
+ * Unlike orderDayStops(), this deliberately retains unresolved venues. The
+ * transfer evaluator then reports those adjacent legs as unknown rather than
+ * connecting two non-adjacent routable classes and giving a misleading ETA.
+ */
+export function orderDayTransferStops(
+  matches: ScheduleMatchResult[],
+  weekday: Weekday,
+): ScheduleDayStop[] {
+  return buildOrderedDayStops(matches, weekday, false);
 }
 
 export function formatMinutes(minutes: number): string {

@@ -23,7 +23,13 @@ const MAX_PER_CATEGORY = 4;
 
 /**
  * Relevance of `needle` inside a display name; lower is better, null = miss.
- * 0 exact name or exact parenthesized acronym, 1 word-start, 2 mid-word.
+ * 0 exact name or exact parenthesized acronym ("Institute of Computer
+ *   Science (ICS)" for "ics"), 1 word-start ("Comp" in "Computer"), 2 mid-word
+ *   substring ("ics" in "Economics").
+ *
+ * Mid-word matches used to win on alphabetical order alone: searching "ICS"
+ * surfaced Econom-ics- and Kinet-ics- while the ICS building never made the
+ * top 8.
  */
 export function nameMatchScore(
   name: string | null | undefined,

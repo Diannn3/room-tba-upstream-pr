@@ -105,8 +105,9 @@ export class BuildingRouteStore {
       });
       if (token !== this.#planToken) return;
       this.phase = "ready";
-    } catch {
+    } catch (err) {
       if (token !== this.#planToken) return;
+      console.warn("building route:", err);
       this.result = null;
       this.phase = "error";
     }
